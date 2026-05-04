@@ -16,13 +16,16 @@
 
     <!-- Application Logic (Alpine.js) -->
     <script>
-        // INISIALISASI SUPABASE (GANTI DENGAN KREDENSIAL ANDA)
+        // INISIALISASI SUPABASE
         const supabaseUrl = 'https://vkdbdrltnfwqqaazusrl.supabase.co';
-        const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZrZGJkcmx0bmZ3cXFhYXp1c3JsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NzA2NDMsImV4cCI6MjA5MzQ0NjY0M30.x4as8jMj8TVzXqNoKktrfMe3KTMm27-LIzZT_sMiU5Y';
         
-        // Cek apakah key sudah diisi untuk mencegah error saat inisialisasi awal
+        // CATATAN: Pastikan key di bawah ini berawalan "eyJhb...", ambil di menu Settings > API > Project API keys (anon)
+        const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZrZGJkcmx0bmZ3cXFhYXp1c3JsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NzA2NDMsImV4cCI6MjA5MzQ0NjY0M30.x4as8jMj8TVzXqNoKktrfMe3KTMm27-LIzZT_sMiU5Y'; 
+        
         const isConfigured = supabaseUrl.startsWith('https://');
-        const supabase = isConfigured ? window.supabase.createClient(supabaseUrl, supabaseKey) : null;
+        
+        // Kita deklarasikan variabel tanpa langsung memanggilnya, agar tidak memblokir UI jika gagal
+        let supabase = null;
 
         function appData() {
             const getEmptySiswa = () => ({ id: '', nama: '', kelas: '' });
@@ -52,15 +55,26 @@
                 filterTx: { search: '', tipe: '', month: '' },
 
                 initApp() {
-                    if (!isConfigured) {
-                        this.showToast("Harap masukkan URL dan Key Supabase di dalam kode HTML.", "error");
-                        return;
+                    // Kita jalankan Supabase di dalam fungsi ini agar UI tetap aman dirender
+                    try {
+                        if (!isConfigured) {
+                            this.showToast("URL Supabase belum dikonfigurasi dengan benar.", "error");
+                        } else if (!window.supabase) {
+                            this.showToast("Koneksi ke server Supabase gagal. Periksa jaringan Anda.", "error");
+                        } else {
+                            supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+                        }
+                    } catch (e) {
+                        this.showToast("Gagal menginisialisasi database: " + e.message, "error");
                     }
+
                     if (localStorage.getItem('eKeuanganTheme') === 'dark') {
                         this.isDarkMode = true;
                         document.body.classList.add('dark');
                     }
-                    this.loadData();
+                    
+                    // Lanjut muat data jika supabase berhasil dibuat
+                    if (supabase) this.loadData();
                 },
 
                 toggleDarkMode() {
@@ -110,19 +124,18 @@
                 async loadData() {
                     this.loading.global = true;
                     try {
-                        // Parallel Fetch untuk performa maksimal
                         const [resSiswa, resTx] = await Promise.all([
                             supabase.from('siswa').select('*').order('nama', { ascending: true }),
                             supabase.from('transaksi').select('*').order('tanggal', { ascending: false })
                         ]);
 
+                        // Tampilkan error otorisasi/API jika ada
                         if (resSiswa.error) throw resSiswa.error;
                         if (resTx.error) throw resTx.error;
 
                         this.siswaList = resSiswa.data || [];
                         this.transaksiList = resTx.data || [];
                         
-                        // Hitung Dashboard Stats secara lokal
                         let income = 0;
                         let expense = 0;
                         this.transaksiList.forEach(t => {
@@ -184,8 +197,9 @@
                 get filteredSiswa() {
                     if (!this.searchSiswa) return this.siswaList;
                     const q = this.searchSiswa.toLowerCase();
+                    // Pencegahan error null di database
                     return this.siswaList.filter(s => 
-                        s.nama.toLowerCase().includes(q) || s.kelas.toLowerCase().includes(q)
+                        (s.nama || '').toLowerCase().includes(q) || (s.kelas || '').toLowerCase().includes(q)
                     );
                 },
 
@@ -199,7 +213,6 @@
                 async submitTransaksi() {
                     this.loading.action = true;
                     try {
-                        // Supabase menolak string kosong untuk UUID, ubah jadi null
                         const payload = {
                             tipe: this.formTx.tipe,
                             kategori: this.formTx.kategori,
@@ -243,10 +256,12 @@
                     return this.transaksiList.filter(t => {
                         let match = true;
                         if (this.filterTx.tipe && t.tipe !== this.filterTx.tipe) match = false;
-                        if (this.filterTx.month && !t.tanggal.startsWith(this.filterTx.month)) match = false;
+                        if (this.filterTx.month && !(t.tanggal || '').startsWith(this.filterTx.month)) match = false;
+                        
                         if (this.filterTx.search) {
                             const q = this.filterTx.search.toLowerCase();
-                            const sName = this.getSiswaName(t.id_siswa).toLowerCase();
+                            // Pencegahan error null dari database
+                            const sName = (this.getSiswaName(t.id_siswa) || '').toLowerCase();
                             const ket = (t.keterangan || '').toLowerCase();
                             if (!sName.includes(q) && !ket.includes(q)) match = false;
                         }
@@ -533,7 +548,7 @@
                                     <div class="relative"><i class="ph ph-magnifying-glass absolute left-2.5 top-2 text-gray-400"></i><input type="text" x-ref="searchInput" x-model="search" placeholder="Cari..." class="w-full py-1.5 pl-8 pr-3 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"></div>
                                 </div>
                                 <div @click="formTx.id_siswa = ''; dropdownOpen = false" class="cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-gray-100 text-gray-900"><span class="block truncate italic text-gray-500">-- Kosongkan --</span></div>
-                                <template x-for="s in siswaList.filter(s => s.nama.toLowerCase().includes(search.toLowerCase()) || s.kelas.toLowerCase().includes(search.toLowerCase()))" :key="s.id">
+                                <template x-for="s in siswaList.filter(s => (s.nama||'').toLowerCase().includes(search.toLowerCase()) || (s.kelas||'').toLowerCase().includes(search.toLowerCase()))" :key="s.id">
                                     <div @click="formTx.id_siswa = s.id; dropdownOpen = false" class="group cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-indigo-600 hover:text-white" :class="formTx.id_siswa === s.id ? 'bg-indigo-50 text-indigo-900 font-semibold' : 'text-gray-900'">
                                         <span class="block truncate" x-text="s.nama + ' (' + s.kelas + ')'"></span>
                                         <span x-show="formTx.id_siswa === s.id" class="absolute inset-y-0 right-0 flex items-center pr-4 text-indigo-600 group-hover:text-white"><i class="ph-fill ph-check-circle text-lg"></i></span>
