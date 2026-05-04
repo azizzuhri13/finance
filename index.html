@@ -25,10 +25,13 @@
 
         function appData() {
             const getEmptySiswa = () => ({ id: '', nama: '', kelas: '' });
+            
+            // Kategori default diubah menjadi Katering
             const getEmptyTx = () => ({ 
-                id_transaksi: '', tipe: 'Masuk', kategori: 'SPP', 
+                id_transaksi: '', tipe: 'Masuk', kategori: 'Katering', 
                 id_siswa: null, jumlah: '', keterangan: '', tanggal: new Date().toISOString().split('T')[0]
             });
+            
             const getEmptyPengguna = () => ({ id: '', username: '', password: '', nama_lengkap: '', role: 'guest' });
 
             return {
@@ -597,7 +600,7 @@
                         </div>
                         
                         <div class="flex gap-2 w-full sm:w-auto" x-show="canEdit()">
-                            <button @click="openModalImport()" class="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
+                            <button @click="openModalImport()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-file-csv mr-2 text-lg"></i> Import CSV
                             </button>
                             <button @click="openModalSiswa()" class="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
@@ -791,11 +794,11 @@
                 <form @submit.prevent="submitImportSiswa" class="space-y-4 border-t border-gray-200 pt-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">Pilih File CSV</label>
-                        <input type="file" accept=".csv" x-ref="fileInput" @change="handleFileSelect" required class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 dark:bg-gray-700 dark:text-gray-300 p-2 border border-gray-300 rounded-md">
+                        <input type="file" accept=".csv" x-ref="fileInput" @change="handleFileSelect" required class="block w-full text-sm text-gray-500 p-2 border border-gray-300 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-300">
                     </div>
                     <div class="mt-6 flex justify-end gap-3 pt-4">
                         <button type="button" @click="modals.importSiswa = false" class="px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">Batal</button>
-                        <button type="submit" class="px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-emerald-600 hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500" :disabled="loading.action">
+                        <button type="submit" class="px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500" :disabled="loading.action">
                             <span x-show="!loading.action">Import Data</span><i x-show="loading.action" class="ph ph-spinner animate-spin"></i>
                         </button>
                     </div>
@@ -813,7 +816,8 @@
                 <form @submit.prevent="submitTransaksi" class="space-y-4">
                     <div class="pb-4 border-b border-gray-200">
                         <label class="block text-sm font-medium text-gray-700 mb-2">Jenis Transaksi</label>
-                        <select x-model="formTx.tipe" @change="formTx.id_siswa = ''; formTx.kategori = formTx.tipe === 'Masuk' ? 'SPP' : 'Operasional';" required class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-gray-50 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-base font-semibold text-gray-800">
+                        <!-- Logika reset diubah di sini: Pemasukan defaultnya menjadi "Katering" -->
+                        <select x-model="formTx.tipe" @change="formTx.id_siswa = ''; formTx.kategori = formTx.tipe === 'Masuk' ? 'Katering' : 'Operasional';" required class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-gray-50 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-base font-semibold text-gray-800">
                             <option value="Masuk">Pemasukan</option><option value="Keluar">Pengeluaran</option>
                         </select>
                     </div>
@@ -821,9 +825,13 @@
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Kategori</label>
                             <select x-model="formTx.kategori" required class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                                <option value="SPP" x-show="formTx.tipe === 'Masuk'">SPP</option>
-                                <option value="Pondok" x-show="formTx.tipe === 'Masuk'">Pondok / Asrama</option>
-                                <option value="Lainnya" x-show="formTx.tipe === 'Masuk'">Lainnya (Pemasukan)</option>
+                                <!-- Opsi Pemasukan yang Baru -->
+                                <option value="Katering" x-show="formTx.tipe === 'Masuk'">Katering</option>
+                                <option value="Madin" x-show="formTx.tipe === 'Masuk'">Madin</option>
+                                <option value="Gedung & Pondok" x-show="formTx.tipe === 'Masuk'">Gedung & Pondok</option>
+                                <option value="Lainnya" x-show="formTx.tipe === 'Masuk'">Lainnya</option>
+                                
+                                <!-- Opsi Pengeluaran -->
                                 <option value="Operasional" x-show="formTx.tipe === 'Keluar'">Operasional</option>
                                 <option value="Gaji" x-show="formTx.tipe === 'Keluar'">Honor / Gaji</option>
                                 <option value="Lainnya" x-show="formTx.tipe === 'Keluar'">Lainnya (Pengeluaran)</option>
