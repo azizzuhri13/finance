@@ -26,9 +26,9 @@
         function appData() {
             const getEmptySiswa = () => ({ id: '', nama: '', kelas: '' });
             
-            // Kategori default diubah menjadi Katering
+            // Kategori default dikembalikan menjadi SPP
             const getEmptyTx = () => ({ 
-                id_transaksi: '', tipe: 'Masuk', kategori: 'Katering', 
+                id_transaksi: '', tipe: 'Masuk', kategori: 'SPP', 
                 id_siswa: null, jumlah: '', keterangan: '', tanggal: new Date().toISOString().split('T')[0]
             });
             
@@ -816,8 +816,8 @@
                 <form @submit.prevent="submitTransaksi" class="space-y-4">
                     <div class="pb-4 border-b border-gray-200">
                         <label class="block text-sm font-medium text-gray-700 mb-2">Jenis Transaksi</label>
-                        <!-- Logika reset diubah di sini: Pemasukan defaultnya menjadi "Katering" -->
-                        <select x-model="formTx.tipe" @change="formTx.id_siswa = ''; formTx.kategori = formTx.tipe === 'Masuk' ? 'Katering' : 'Operasional';" required class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-gray-50 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-base font-semibold text-gray-800">
+                        <!-- Logika reset diubah di sini: Pemasukan defaultnya menjadi "SPP" -->
+                        <select x-model="formTx.tipe" @change="formTx.id_siswa = ''; formTx.kategori = formTx.tipe === 'Masuk' ? 'SPP' : 'Operasional';" required class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-gray-50 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-base font-semibold text-gray-800">
                             <option value="Masuk">Pemasukan</option><option value="Keluar">Pengeluaran</option>
                         </select>
                     </div>
@@ -825,7 +825,8 @@
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Kategori</label>
                             <select x-model="formTx.kategori" required class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                                <!-- Opsi Pemasukan yang Baru -->
+                                <!-- Opsi Pemasukan yang Baru dengan SPP -->
+                                <option value="SPP" x-show="formTx.tipe === 'Masuk'">SPP</option>
                                 <option value="Katering" x-show="formTx.tipe === 'Masuk'">Katering</option>
                                 <option value="Madin" x-show="formTx.tipe === 'Masuk'">Madin</option>
                                 <option value="Gedung & Pondok" x-show="formTx.tipe === 'Masuk'">Gedung & Pondok</option>
