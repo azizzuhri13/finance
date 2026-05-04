@@ -13,6 +13,8 @@
     
     <!-- Supabase JS Client -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!-- PapaParse for CSV Import -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 
     <!-- Application Logic (Alpine.js) -->
     <script>
@@ -20,7 +22,6 @@
         const supabaseUrl = 'https://vkdbdrltnfwqqaazusrl.supabase.co';
         const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZrZGJkcmx0bmZ3cXFhYXp1c3JsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NzA2NDMsImV4cCI6MjA5MzQ0NjY0M30.x4as8jMj8TVzXqNoKktrfMe3KTMm27-LIzZT_sMiU5Y'; 
         
-        // Ganti nama variabel menjadi sbClient agar TIDAK BENTROK dengan CDN Supabase
         let sbClient = null;
 
         function appData() {
@@ -43,9 +44,11 @@
                 loading: { global: false, action: false },
                 toasts: [],
                 
-                modals: { siswa: false, transaksi: false },
+                // Tambahan modal importSiswa
+                modals: { siswa: false, transaksi: false, importSiswa: false },
                 formSiswa: getEmptySiswa(),
                 formTx: getEmptyTx(),
+                importFile: null,
                 
                 searchSiswa: '',
                 filterTx: { search: '', tipe: '', month: '' },
@@ -55,7 +58,6 @@
                         if (!window.supabase) {
                             this.showToast("Koneksi ke server Supabase gagal dimuat dari CDN.", "error");
                         } else {
-                            // Gunakan sbClient
                             sbClient = window.supabase.createClient(supabaseUrl, supabaseKey);
                         }
                     } catch (e) {
@@ -139,6 +141,9 @@
                     }
                 },
 
+                // ==========================================
+                // CRUD SISWA & IMPORT LOGIC
+                // ==========================================
                 emptyFormSiswa() { return getEmptySiswa(); },
                 openModalSiswa(data = null) {
                     this.formSiswa = data ? { ...data } : this.emptyFormSiswa();
@@ -189,6 +194,80 @@
                     );
                 },
 
+                openModalImport() {
+                    this.importFile = null;
+                    if(this.$refs.fileInput) this.$refs.fileInput.value = '';
+                    this.modals.importSiswa = true;
+                },
+
+                handleFileSelect(e) {
+                    this.importFile = e.target.files[0];
+                },
+
+                downloadTemplate() {
+                    const csvContent = "data:text/csv;charset=utf-8,Nama,Kelas\nAhmad Faisal,X-IPA-1\nBudi Santoso,X-IPS-2";
+                    const encodedUri = encodeURI(csvContent);
+                    const link = document.createElement("a");
+                    link.setAttribute("href", encodedUri);
+                    link.setAttribute("download", "template_siswa.csv");
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                },
+
+                async submitImportSiswa() {
+                    if (!this.importFile) {
+                        this.showToast("Pilih file CSV terlebih dahulu.", "error");
+                        return;
+                    }
+
+                    this.loading.action = true;
+
+                    Papa.parse(this.importFile, {
+                        header: true,
+                        skipEmptyLines: true,
+                        complete: async (results) => {
+                            try {
+                                const data = results.data;
+                                const payload = [];
+
+                                for (let row of data) {
+                                    // Mendukung huruf besar/kecil pada header Excel/CSV
+                                    const nama = row['Nama'] || row['nama'] || row['NAMA'];
+                                    const kelas = row['Kelas'] || row['kelas'] || row['KELAS'];
+
+                                    if (nama && kelas) {
+                                        payload.push({ nama: nama.trim(), kelas: kelas.trim() });
+                                    }
+                                }
+
+                                if (payload.length === 0) {
+                                    throw new Error("Data tidak valid. Pastikan header CSV adalah 'Nama' dan 'Kelas'.");
+                                }
+
+                                // Eksekusi Bulk Insert ke Supabase
+                                const { error } = await sbClient.from('siswa').insert(payload);
+                                if (error) throw error;
+
+                                this.modals.importSiswa = false;
+                                this.showToast(`${payload.length} data siswa berhasil diimport.`);
+                                this.loadData();
+                            } catch (e) {
+                                this.showToast(e.message, 'error');
+                            } finally {
+                                this.loading.action = false;
+                            }
+                        },
+                        error: (err) => {
+                            this.showToast("Gagal membaca file: " + err.message, "error");
+                            this.loading.action = false;
+                        }
+                    });
+                },
+
+                // ==========================================
+                // CRUD TRANSAKSI LOGIC
+                // ==========================================
                 emptyFormTx() { return getEmptyTx(); },
                 openModalTx(data = null) {
                     this.formTx = data ? { ...data } : this.emptyFormTx();
@@ -282,6 +361,8 @@
         .dark .text-indigo-900 { color: #e0e7ff !important; }
         .dark .bg-green-100 { background-color: rgba(16, 185, 129, 0.15) !important; }
         .dark .text-green-600, .dark .text-green-800 { color: #34d399 !important; }
+        .dark .bg-emerald-600 { background-color: #059669 !important; }
+        .dark .hover\:bg-emerald-700:hover { background-color: #047857 !important; }
         .dark .bg-red-100 { background-color: rgba(239, 68, 68, 0.15) !important; }
         .dark .text-red-600, .dark .text-red-800 { color: #f87171 !important; }
         .dark .bg-blue-50 { background-color: rgba(59, 130, 246, 0.15) !important; border-color: rgba(59, 130, 246, 0.3) !important; }
@@ -369,9 +450,16 @@
                         <input type="text" x-model="searchSiswa" placeholder="Cari nama atau kelas..." class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition">
                         <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-gray-400 text-lg"></i>
                     </div>
-                    <button @click="openModalSiswa()" class="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
-                        <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah Siswa
-                    </button>
+                    
+                    <!-- Kumpulan Tombol Tambah & Import -->
+                    <div class="flex gap-2 w-full sm:w-auto">
+                        <button @click="openModalImport()" class="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
+                            <i class="ph ph-file-csv mr-2 text-lg"></i> Import CSV
+                        </button>
+                        <button @click="openModalSiswa()" class="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
+                            <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah Siswa
+                        </button>
+                    </div>
                 </div>
 
                 <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden transition-colors duration-200">
@@ -471,7 +559,7 @@
         </div>
     </main>
 
-    <!-- MODAL SISWA -->
+    <!-- MODAL SISWA (SINGLE INPUT) -->
     <div x-show="modals.siswa" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
         <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:p-0">
             <div x-show="modals.siswa" x-transition.opacity class="fixed inset-0 transition-opacity"><div class="absolute inset-0 bg-gray-500 bg-opacity-75 backdrop-filter backdrop-blur-sm"></div></div>
@@ -490,6 +578,37 @@
                         <button type="button" @click="modals.siswa = false" class="px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">Batal</button>
                         <button type="submit" class="px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" :disabled="loading.action">
                             <span x-show="!loading.action">Simpan</span><i x-show="loading.action" class="ph ph-spinner animate-spin"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL IMPORT SISWA (CSV) -->
+    <div x-show="modals.importSiswa" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:p-0">
+            <div x-show="modals.importSiswa" x-transition.opacity class="fixed inset-0 transition-opacity"><div class="absolute inset-0 bg-gray-500 bg-opacity-75 backdrop-filter backdrop-blur-sm"></div></div>
+            <div x-show="modals.importSiswa" x-transition class="inline-block w-full max-w-md p-6 my-8 overflow-hidden text-left align-middle transition-all transform bg-white rounded-2xl shadow-xl border border-gray-100 relative">
+                <h3 class="text-lg font-bold leading-6 text-gray-900 mb-2">Import Data Siswa (CSV)</h3>
+                <p class="text-sm text-gray-500 mb-4">Upload file .csv yang berisi data siswa. Pastikan format kolom baris pertama adalah <b>Nama</b> dan <b>Kelas</b>.</p>
+                
+                <!-- Tombol Download Template CSV -->
+                <button @click="downloadTemplate()" type="button" class="mb-4 w-full flex justify-center items-center px-4 py-2 border border-indigo-300 text-sm font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 focus:outline-none transition">
+                    <i class="ph ph-download-simple mr-2 text-lg"></i> Download Template CSV
+                </button>
+
+                <form @submit.prevent="submitImportSiswa" class="space-y-4 border-t border-gray-200 pt-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Pilih File CSV</label>
+                        <!-- Form file input standard agar berjalan mulus di semua browser -->
+                        <input type="file" accept=".csv" x-ref="fileInput" @change="handleFileSelect" required class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 dark:bg-gray-700 dark:text-gray-300 p-2 border border-gray-300 rounded-md">
+                    </div>
+                    
+                    <div class="mt-6 flex justify-end gap-3 pt-4">
+                        <button type="button" @click="modals.importSiswa = false" class="px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">Batal</button>
+                        <button type="submit" class="px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-emerald-600 hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500" :disabled="loading.action">
+                            <span x-show="!loading.action">Import Data</span><i x-show="loading.action" class="ph ph-spinner animate-spin"></i>
                         </button>
                     </div>
                 </form>
