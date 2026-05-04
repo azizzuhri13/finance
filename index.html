@@ -11,9 +11,8 @@
     <link rel="stylesheet" type="text/css" href="https://unpkg.com/@phosphor-icons/web@2.0.3/src/regular/style.css">
     <link rel="stylesheet" type="text/css" href="https://unpkg.com/@phosphor-icons/web@2.0.3/src/fill/style.css">
     
-    <!-- Supabase JS Client -->
+    <!-- Supabase JS Client & PapaParse -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <!-- PapaParse for CSV Import -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 
     <!-- Application Logic (Alpine.js) -->
@@ -28,38 +27,42 @@
             const getEmptySiswa = () => ({ id: '', nama: '', kelas: '' });
             const getEmptyTx = () => ({ 
                 id_transaksi: '', tipe: 'Masuk', kategori: 'SPP', 
-                id_siswa: null, jumlah: '', keterangan: '',
-                tanggal: new Date().toISOString().split('T')[0]
+                id_siswa: null, jumlah: '', keterangan: '', tanggal: new Date().toISOString().split('T')[0]
             });
+            const getEmptyPengguna = () => ({ id: '', username: '', password: '', nama_lengkap: '', role: 'guest' });
 
             return {
+                // Auth & Theme States
                 isDarkMode: false,
+                isLoggedIn: false,
+                currentUser: null,
+                loginForm: { username: '', password: '' },
+
+                // UI States
                 sidebarOpen: false,
                 currentTab: 'dashboard',
+                loading: { global: false, action: false, login: false },
+                toasts: [],
+                modals: { siswa: false, transaksi: false, importSiswa: false, pengguna: false },
                 
+                // Data States
                 stats: { totalIncome: 0, totalExpense: 0, netBalance: 0 },
                 siswaList: [],
                 transaksiList: [],
+                penggunaList: [],
                 
-                loading: { global: false, action: false },
-                toasts: [],
-                
-                // Tambahan modal importSiswa
-                modals: { siswa: false, transaksi: false, importSiswa: false },
+                // Form & Filter States
                 formSiswa: getEmptySiswa(),
                 formTx: getEmptyTx(),
+                formPengguna: getEmptyPengguna(),
                 importFile: null,
-                
                 searchSiswa: '',
                 filterTx: { search: '', tipe: '', month: '' },
 
                 initApp() {
                     try {
-                        if (!window.supabase) {
-                            this.showToast("Koneksi ke server Supabase gagal dimuat dari CDN.", "error");
-                        } else {
-                            sbClient = window.supabase.createClient(supabaseUrl, supabaseKey);
-                        }
+                        if (!window.supabase) this.showToast("Koneksi Supabase gagal dimuat.", "error");
+                        else sbClient = window.supabase.createClient(supabaseUrl, supabaseKey);
                     } catch (e) {
                         this.showToast("Error sistem: " + e.message, "error");
                     }
@@ -68,10 +71,65 @@
                         this.isDarkMode = true;
                         document.body.classList.add('dark');
                     }
-                    
-                    if (sbClient) this.loadData();
+
+                    // Cek Sesi Login
+                    const savedSession = localStorage.getItem('eKeuanganSession');
+                    if (savedSession) {
+                        this.currentUser = JSON.parse(savedSession);
+                        this.isLoggedIn = true;
+                        if (sbClient) this.loadData();
+                    }
                 },
 
+                // ==========================================
+                // AUTHENTICATION & ROLES LOGIC
+                // ==========================================
+                async doLogin() {
+                    this.loading.login = true;
+                    try {
+                        const { data, error } = await sbClient.from('pengguna')
+                            .select('*')
+                            .eq('username', this.loginForm.username)
+                            .eq('password', this.loginForm.password)
+                            .single();
+                        
+                        if (error || !data) throw new Error("Username atau password salah!");
+
+                        this.currentUser = data;
+                        this.isLoggedIn = true;
+                        localStorage.setItem('eKeuanganSession', JSON.stringify(data));
+                        
+                        this.loginForm = { username: '', password: '' };
+                        this.showToast(`Selamat datang, ${data.nama_lengkap}!`);
+                        this.loadData();
+                    } catch (e) {
+                        this.showToast(e.message, 'error');
+                    }
+                    this.loading.login = false;
+                },
+
+                doLogout() {
+                    this.isLoggedIn = false;
+                    this.currentUser = null;
+                    localStorage.removeItem('eKeuanganSession');
+                    this.currentTab = 'dashboard';
+                    this.siswaList = [];
+                    this.transaksiList = [];
+                    this.penggunaList = [];
+                },
+
+                canEdit() {
+                    // Admin & Finance bisa edit data operasional (Siswa & Transaksi)
+                    return this.currentUser && ['admin', 'finance'].includes(this.currentUser.role);
+                },
+
+                isAdmin() {
+                    return this.currentUser && this.currentUser.role === 'admin';
+                },
+
+                // ==========================================
+                // UTILITIES
+                // ==========================================
                 toggleDarkMode() {
                     this.isDarkMode = !this.isDarkMode;
                     if (this.isDarkMode) {
@@ -104,30 +162,48 @@
                     return siswa ? `${siswa.nama} (${siswa.kelas})` : "Siswa Tidak Ditemukan";
                 },
 
+                getRoleBadge(role) {
+                    if(role === 'admin') return '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-purple-100 text-purple-800">Admin</span>';
+                    if(role === 'finance') return '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">Finance</span>';
+                    return '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">Guest</span>';
+                },
+
                 showToast(message, type = 'success') {
                     const id = Date.now();
                     this.toasts.push({ id, message, type });
-                    setTimeout(() => {
-                        this.toasts = this.toasts.filter(t => t.id !== id);
-                    }, 3000);
+                    setTimeout(() => { this.toasts = this.toasts.filter(t => t.id !== id); }, 3000);
                 },
 
+                // ==========================================
+                // SUPABASE DATA FETCHING
+                // ==========================================
                 async loadData() {
                     this.loading.global = true;
                     try {
-                        const [resSiswa, resTx] = await Promise.all([
+                        const promises = [
                             sbClient.from('siswa').select('*').order('nama', { ascending: true }),
                             sbClient.from('transaksi').select('*').order('tanggal', { ascending: false })
-                        ]);
+                        ];
 
-                        if (resSiswa.error) throw resSiswa.error;
-                        if (resTx.error) throw resTx.error;
+                        // Hanya fetch data pengguna jika role adalah admin
+                        if (this.isAdmin()) {
+                            promises.push(sbClient.from('pengguna').select('*').order('nama_lengkap', { ascending: true }));
+                        }
 
-                        this.siswaList = resSiswa.data || [];
-                        this.transaksiList = resTx.data || [];
+                        const results = await Promise.all(promises);
+
+                        if (results[0].error) throw results[0].error;
+                        if (results[1].error) throw results[1].error;
+
+                        this.siswaList = results[0].data || [];
+                        this.transaksiList = results[1].data || [];
                         
-                        let income = 0;
-                        let expense = 0;
+                        if (this.isAdmin() && results[2]) {
+                            if (results[2].error) throw results[2].error;
+                            this.penggunaList = results[2].data || [];
+                        }
+                        
+                        let income = 0, expense = 0;
                         this.transaksiList.forEach(t => {
                             if (t.tipe === 'Masuk') income += Number(t.jumlah);
                             else if (t.tipe === 'Keluar') expense += Number(t.jumlah);
@@ -142,7 +218,7 @@
                 },
 
                 // ==========================================
-                // CRUD SISWA & IMPORT LOGIC
+                // CRUD SISWA & IMPORT
                 // ==========================================
                 emptyFormSiswa() { return getEmptySiswa(); },
                 openModalSiswa(data = null) {
@@ -151,47 +227,39 @@
                 },
 
                 async submitSiswa() {
+                    if(!this.canEdit()) return;
                     this.loading.action = true;
                     try {
                         if (this.formSiswa.id) {
-                            const { error } = await sbClient.from('siswa')
-                                .update({ nama: this.formSiswa.nama, kelas: this.formSiswa.kelas })
-                                .eq('id', this.formSiswa.id);
+                            const { error } = await sbClient.from('siswa').update({ nama: this.formSiswa.nama, kelas: this.formSiswa.kelas }).eq('id', this.formSiswa.id);
                             if (error) throw error;
                         } else {
-                            const { error } = await sbClient.from('siswa')
-                                .insert([{ nama: this.formSiswa.nama, kelas: this.formSiswa.kelas }]);
+                            const { error } = await sbClient.from('siswa').insert([{ nama: this.formSiswa.nama, kelas: this.formSiswa.kelas }]);
                             if (error) throw error;
                         }
                         this.modals.siswa = false;
                         this.showToast("Data Siswa berhasil disimpan.");
                         this.loadData();
-                    } catch(e) {
-                        this.showToast("Gagal menyimpan: " + e.message, 'error');
-                    }
+                    } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
                     this.loading.action = false;
                 },
 
                 async deleteSiswa(id) {
-                    if (!confirm("Hapus data siswa ini?")) return;
+                    if(!this.canEdit() || !confirm("Hapus data siswa ini?")) return;
                     this.loading.global = true;
                     try {
                         const { error } = await sbClient.from('siswa').delete().eq('id', id);
                         if (error) throw error;
                         this.showToast("Siswa dihapus.");
                         this.loadData();
-                    } catch(e) {
-                        this.showToast("Gagal menghapus: " + e.message, 'error');
-                    }
+                    } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
                     this.loading.global = false;
                 },
 
                 get filteredSiswa() {
                     if (!this.searchSiswa) return this.siswaList;
                     const q = this.searchSiswa.toLowerCase();
-                    return this.siswaList.filter(s => 
-                        (s.nama || '').toLowerCase().includes(q) || (s.kelas || '').toLowerCase().includes(q)
-                    );
+                    return this.siswaList.filter(s => (s.nama || '').toLowerCase().includes(q) || (s.kelas || '').toLowerCase().includes(q));
                 },
 
                 openModalImport() {
@@ -199,74 +267,42 @@
                     if(this.$refs.fileInput) this.$refs.fileInput.value = '';
                     this.modals.importSiswa = true;
                 },
-
-                handleFileSelect(e) {
-                    this.importFile = e.target.files[0];
-                },
-
+                handleFileSelect(e) { this.importFile = e.target.files[0]; },
                 downloadTemplate() {
-                    const csvContent = "data:text/csv;charset=utf-8,Nama,Kelas\nAhmad Faisal,X-IPA-1\nBudi Santoso,X-IPS-2";
-                    const encodedUri = encodeURI(csvContent);
                     const link = document.createElement("a");
-                    link.setAttribute("href", encodedUri);
+                    link.setAttribute("href", encodeURI("data:text/csv;charset=utf-8,Nama,Kelas\nAhmad Faisal,X-IPA-1\nBudi Santoso,X-IPS-2"));
                     link.setAttribute("download", "template_siswa.csv");
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
+                    document.body.appendChild(link); link.click(); document.body.removeChild(link);
                 },
 
                 async submitImportSiswa() {
-                    if (!this.importFile) {
-                        this.showToast("Pilih file CSV terlebih dahulu.", "error");
-                        return;
-                    }
-
+                    if (!this.importFile) return this.showToast("Pilih file CSV.", "error");
                     this.loading.action = true;
-
                     Papa.parse(this.importFile, {
-                        header: true,
-                        skipEmptyLines: true,
+                        header: true, skipEmptyLines: true,
                         complete: async (results) => {
                             try {
-                                const data = results.data;
-                                const payload = [];
+                                const payload = results.data.map(row => {
+                                    const n = row['Nama'] || row['nama'] || row['NAMA'];
+                                    const k = row['Kelas'] || row['kelas'] || row['KELAS'];
+                                    return (n && k) ? { nama: n.trim(), kelas: k.trim() } : null;
+                                }).filter(i => i !== null);
 
-                                for (let row of data) {
-                                    // Mendukung huruf besar/kecil pada header Excel/CSV
-                                    const nama = row['Nama'] || row['nama'] || row['NAMA'];
-                                    const kelas = row['Kelas'] || row['kelas'] || row['KELAS'];
-
-                                    if (nama && kelas) {
-                                        payload.push({ nama: nama.trim(), kelas: kelas.trim() });
-                                    }
-                                }
-
-                                if (payload.length === 0) {
-                                    throw new Error("Data tidak valid. Pastikan header CSV adalah 'Nama' dan 'Kelas'.");
-                                }
-
-                                // Eksekusi Bulk Insert ke Supabase
+                                if (payload.length === 0) throw new Error("Data tidak valid. Butuh kolom 'Nama' & 'Kelas'.");
                                 const { error } = await sbClient.from('siswa').insert(payload);
                                 if (error) throw error;
 
                                 this.modals.importSiswa = false;
-                                this.showToast(`${payload.length} data siswa berhasil diimport.`);
+                                this.showToast(`${payload.length} data siswa diimport.`);
                                 this.loadData();
-                            } catch (e) {
-                                this.showToast(e.message, 'error');
-                            } finally {
-                                this.loading.action = false;
-                            }
-                        },
-                        error: (err) => {
-                            this.showToast("Gagal membaca file: " + err.message, "error");
-                            this.loading.action = false;
+                            } catch (e) { this.showToast(e.message, 'error'); } 
+                            finally { this.loading.action = false; }
                         }
                     });
                 },
 
                 // ==========================================
-                // CRUD TRANSAKSI LOGIC
+                // CRUD TRANSAKSI
                 // ==========================================
                 emptyFormTx() { return getEmptyTx(); },
                 openModalTx(data = null) {
@@ -275,15 +311,13 @@
                 },
 
                 async submitTransaksi() {
+                    if(!this.canEdit()) return;
                     this.loading.action = true;
                     try {
                         const payload = {
-                            tipe: this.formTx.tipe,
-                            kategori: this.formTx.kategori,
+                            tipe: this.formTx.tipe, kategori: this.formTx.kategori,
                             id_siswa: this.formTx.id_siswa === '' ? null : this.formTx.id_siswa,
-                            jumlah: this.formTx.jumlah,
-                            tanggal: this.formTx.tanggal,
-                            keterangan: this.formTx.keterangan
+                            jumlah: this.formTx.jumlah, tanggal: this.formTx.tanggal, keterangan: this.formTx.keterangan
                         };
 
                         if (this.formTx.id_transaksi) {
@@ -294,25 +328,21 @@
                             if (error) throw error;
                         }
                         this.modals.transaksi = false;
-                        this.showToast("Transaksi berhasil dicatat.");
+                        this.showToast("Transaksi dicatat.");
                         this.loadData();
-                    } catch(e) {
-                        this.showToast("Gagal mencatat: " + e.message, 'error');
-                    }
+                    } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
                     this.loading.action = false;
                 },
 
                 async deleteTransaksi(id) {
-                    if (!confirm("Hapus transaksi ini? Aksi ini memengaruhi saldo.")) return;
+                    if(!this.canEdit() || !confirm("Hapus transaksi ini?")) return;
                     this.loading.global = true;
                     try {
                         const { error } = await sbClient.from('transaksi').delete().eq('id_transaksi', id);
                         if (error) throw error;
                         this.showToast("Transaksi dihapus.");
                         this.loadData();
-                    } catch(e) {
-                        this.showToast("Gagal menghapus: " + e.message, 'error');
-                    }
+                    } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
                     this.loading.global = false;
                 },
 
@@ -321,7 +351,6 @@
                         let match = true;
                         if (this.filterTx.tipe && t.tipe !== this.filterTx.tipe) match = false;
                         if (this.filterTx.month && !(t.tanggal || '').startsWith(this.filterTx.month)) match = false;
-                        
                         if (this.filterTx.search) {
                             const q = this.filterTx.search.toLowerCase();
                             const sName = (this.getSiswaName(t.id_siswa) || '').toLowerCase();
@@ -330,6 +359,54 @@
                         }
                         return match;
                     });
+                },
+
+                // ==========================================
+                // CRUD PENGGUNA (HANYA ADMIN)
+                // ==========================================
+                emptyFormPengguna() { return getEmptyPengguna(); },
+                openModalPengguna(data = null) {
+                    this.formPengguna = data ? { ...data } : this.emptyFormPengguna();
+                    this.modals.pengguna = true;
+                },
+
+                async submitPengguna() {
+                    if(!this.isAdmin()) return;
+                    this.loading.action = true;
+                    try {
+                        const payload = {
+                            username: this.formPengguna.username,
+                            password: this.formPengguna.password,
+                            nama_lengkap: this.formPengguna.nama_lengkap,
+                            role: this.formPengguna.role
+                        };
+
+                        if (this.formPengguna.id) {
+                            const { error } = await sbClient.from('pengguna').update(payload).eq('id', this.formPengguna.id);
+                            if (error) throw error;
+                        } else {
+                            const { error } = await sbClient.from('pengguna').insert([payload]);
+                            if (error) throw error;
+                        }
+                        this.modals.pengguna = false;
+                        this.showToast("Data User disimpan.");
+                        this.loadData();
+                    } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
+                    this.loading.action = false;
+                },
+
+                async deletePengguna(id) {
+                    if(!this.isAdmin() || !confirm("Hapus user ini?")) return;
+                    if(id === this.currentUser.id) return this.showToast("Tidak bisa menghapus akun sendiri!", "error");
+                    
+                    this.loading.global = true;
+                    try {
+                        const { error } = await sbClient.from('pengguna').delete().eq('id', id);
+                        if (error) throw error;
+                        this.showToast("User dihapus.");
+                        this.loadData();
+                    } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
+                    this.loading.global = false;
                 }
             }
         }
@@ -367,199 +444,315 @@
         .dark .text-red-600, .dark .text-red-800 { color: #f87171 !important; }
         .dark .bg-blue-50 { background-color: rgba(59, 130, 246, 0.15) !important; border-color: rgba(59, 130, 246, 0.3) !important; }
         .dark .text-blue-700 { color: #60a5fa !important; }
+        .dark .bg-purple-100 { background-color: rgba(168, 85, 247, 0.15) !important; }
+        .dark .text-purple-800 { color: #c084fc !important; }
         .dark .bg-gray-800 { background-color: #374151 !important; } 
     </style>
 </head>
 <body class="bg-gray-50 text-gray-800 font-sans antialiased transition-colors duration-200" x-data="appData()" x-init="initApp()" x-cloak>
 
-    <!-- Overlay Mobile -->
-    <div x-show="sidebarOpen" class="fixed inset-0 z-20 bg-black bg-opacity-50 lg:hidden" @click="sidebarOpen = false" x-transition.opacity></div>
-
-    <!-- Sidebar Navigation -->
-    <aside :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'" class="transform fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-gray-200 transition-transform duration-300 ease-in-out lg:translate-x-0 flex flex-col shadow-sm lg:shadow-none">
-        <div class="flex items-center justify-center h-16 border-b border-gray-200 px-4">
-            <i class="ph-fill ph-wallet text-indigo-600 text-2xl mr-2"></i>
-            <h1 class="text-lg font-bold text-gray-800 tracking-tight">E-Keuangan</h1>
-        </div>
-        <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
-            <button @click="changeTab('dashboard')" :class="currentTab === 'dashboard' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-100'" class="w-full flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors">
-                <i class="ph ph-squares-four text-lg mr-3"></i> Dashboard
-            </button>
-            <button @click="changeTab('siswa')" :class="currentTab === 'siswa' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-100'" class="w-full flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors">
-                <i class="ph ph-users text-lg mr-3"></i> Data Siswa
-            </button>
-            <button @click="changeTab('transaksi')" :class="currentTab === 'transaksi' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-100'" class="w-full flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors">
-                <i class="ph ph-swap text-lg mr-3"></i> Transaksi
-            </button>
-        </nav>
-    </aside>
-
-    <!-- Main Content Area -->
-    <main class="lg:ml-64 min-h-screen flex flex-col transition-all duration-300">
-        
-        <!-- Header -->
-        <header class="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 sm:px-6 z-10 sticky top-0 transition-colors duration-200">
-            <div class="flex items-center">
-                <button @click="sidebarOpen = true" class="text-gray-500 hover:text-gray-700 focus:outline-none lg:hidden mr-4">
-                    <i class="ph ph-list text-2xl"></i>
-                </button>
-                <h2 class="text-xl font-semibold text-gray-800 capitalize" x-text="currentTab === 'siswa' ? 'Data Siswa' : currentTab"></h2>
-            </div>
-            <div class="flex items-center">
-                <button @click="toggleDarkMode()" class="text-gray-500 hover:text-indigo-600 focus:outline-none mr-4 transition-colors" title="Ganti Tema">
-                    <i class="ph text-2xl" :class="isDarkMode ? 'ph-sun text-yellow-500' : 'ph-moon'"></i>
-                </button>
-                <div class="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold shadow-inner border border-transparent">A</div>
-            </div>
-        </header>
-
-        <!-- Content -->
-        <div class="flex-1 p-4 sm:p-6 lg:p-8 overflow-x-hidden">
+    <!-- ============================================================== -->
+    <!-- HALAMAN LOGIN (Tampil jika belum login)                        -->
+    <!-- ============================================================== -->
+    <div x-show="!isLoggedIn" class="min-h-screen flex items-center justify-center p-4">
+        <div class="max-w-md w-full bg-white rounded-2xl shadow-xl border border-gray-100 p-8 relative overflow-hidden transition-colors duration-200">
+            <!-- Dekorasi background -->
+            <div class="absolute -top-24 -right-24 w-48 h-48 bg-indigo-50 rounded-full blur-3xl opacity-50"></div>
+            <div class="absolute -bottom-24 -left-24 w-48 h-48 bg-blue-50 rounded-full blur-3xl opacity-50"></div>
             
-            <div x-show="loading.global" class="mb-6 bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded flex items-center">
-                <i class="ph ph-spinner animate-spin text-xl mr-3"></i> <span>Menyinkronkan data dari Supabase...</span>
-            </div>
-
-            <!-- DASHBOARD -->
-            <div x-show="currentTab === 'dashboard'" x-transition.opacity.duration.300ms>
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-8">
-                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex items-center transition-colors duration-200">
-                        <div class="p-3 rounded-full bg-green-100 text-green-600 mr-4"><i class="ph ph-trend-up text-2xl"></i></div>
-                        <div><p class="text-sm font-medium text-gray-500 mb-1">Total Pemasukan</p><h3 class="text-2xl font-bold text-gray-800" x-text="formatCurrency(stats.totalIncome)"></h3></div>
+            <div class="relative z-10">
+                <div class="text-center mb-8">
+                    <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-indigo-100 text-indigo-600 mb-4">
+                        <i class="ph-fill ph-wallet text-3xl"></i>
                     </div>
-                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex items-center transition-colors duration-200">
-                        <div class="p-3 rounded-full bg-red-100 text-red-600 mr-4"><i class="ph ph-trend-down text-2xl"></i></div>
-                        <div><p class="text-sm font-medium text-gray-500 mb-1">Total Pengeluaran</p><h3 class="text-2xl font-bold text-gray-800" x-text="formatCurrency(stats.totalExpense)"></h3></div>
-                    </div>
-                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex items-center transition-colors duration-200">
-                        <div class="p-3 rounded-full bg-indigo-100 text-indigo-600 mr-4"><i class="ph ph-scales text-2xl"></i></div>
-                        <div><p class="text-sm font-medium text-gray-500 mb-1">Saldo Bersih</p><h3 class="text-2xl font-bold text-gray-800" x-text="formatCurrency(stats.netBalance)"></h3></div>
-                    </div>
-                </div>
-                <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 transition-colors duration-200">
-                    <h3 class="text-lg font-semibold text-gray-800 mb-4">Database: Supabase (PostgreSQL)</h3>
-                    <p class="text-gray-600 text-sm leading-relaxed mb-4">Aplikasi sekarang berjalan 100% menggunakan arsitektur serverless dengan database Supabase, memberikan performa tinggi dan sinkronisasi real-time instan.</p>
-                    <button @click="loadData()" class="text-sm text-indigo-600 font-medium hover:underline flex items-center"><i class="ph ph-arrows-clockwise mr-1"></i> Muat Ulang Data</button>
-                </div>
-            </div>
-
-            <!-- DATA SISWA -->
-            <div x-show="currentTab === 'siswa'" x-transition.opacity.duration.300ms style="display: none;">
-                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-                    <div class="relative w-full sm:w-64">
-                        <input type="text" x-model="searchSiswa" placeholder="Cari nama atau kelas..." class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition">
-                        <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-gray-400 text-lg"></i>
-                    </div>
-                    
-                    <!-- Kumpulan Tombol Tambah & Import -->
-                    <div class="flex gap-2 w-full sm:w-auto">
-                        <button @click="openModalImport()" class="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
-                            <i class="ph ph-file-csv mr-2 text-lg"></i> Import CSV
-                        </button>
-                        <button @click="openModalSiswa()" class="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
-                            <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah Siswa
-                        </button>
-                    </div>
+                    <h2 class="text-2xl font-bold text-gray-900">E-Keuangan Login</h2>
+                    <p class="text-sm text-gray-500 mt-1">Silakan masuk menggunakan akun Anda</p>
                 </div>
 
-                <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden transition-colors duration-200">
-                    <div class="overflow-x-auto custom-scroll">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nama</th>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Kelas</th>
-                                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi</th>
-                                </tr>
-                            </thead>
-                            <tbody class="bg-white divide-y divide-gray-200">
-                                <template x-for="s in filteredSiswa" :key="s.id">
-                                    <tr class="hover:bg-gray-50 transition">
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="s.nama"></td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="s.kelas"></td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                            <button @click="openModalSiswa(s)" class="text-indigo-600 hover:text-indigo-900 mr-3" title="Edit"><i class="ph ph-pencil-simple text-lg"></i></button>
-                                            <button @click="deleteSiswa(s.id)" class="text-red-600 hover:text-red-900" title="Hapus"><i class="ph ph-trash text-lg"></i></button>
-                                        </td>
-                                    </tr>
-                                </template>
-                                <tr x-show="filteredSiswa.length === 0"><td colspan="3" class="px-6 py-10 text-center text-gray-500">Tidak ada data siswa.</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-            <!-- TRANSAKSI -->
-            <div x-show="currentTab === 'transaksi'" x-transition.opacity.duration.300ms style="display: none;">
-                <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6 flex flex-wrap gap-4 items-end transition-colors duration-200">
-                    <div class="flex-1" style="min-width: 200px;">
-                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Cari Keterangan / Siswa</label>
+                <form @submit.prevent="doLogin" class="space-y-5">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Username</label>
                         <div class="relative">
-                            <input type="text" x-model="filterTx.search" placeholder="Pencarian..." class="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
-                            <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-gray-400"></i>
+                            <i class="ph ph-user absolute left-3 top-2.5 text-gray-400 text-lg"></i>
+                            <input type="text" x-model="loginForm.username" required class="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-shadow bg-gray-50 dark:bg-gray-800">
                         </div>
                     </div>
-                    <div class="w-full sm:w-auto">
-                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Tipe</label>
-                        <select x-model="filterTx.tipe" class="w-full py-2 px-3 border border-gray-300 bg-white rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
-                            <option value="">Semua Tipe</option><option value="Masuk">Pemasukan</option><option value="Keluar">Pengeluaran</option>
-                        </select>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                        <div class="relative">
+                            <i class="ph ph-lock-key absolute left-3 top-2.5 text-gray-400 text-lg"></i>
+                            <input type="password" x-model="loginForm.password" required class="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-shadow bg-gray-50 dark:bg-gray-800">
+                        </div>
                     </div>
-                    <div class="w-full sm:w-auto">
-                        <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Bulan</label>
-                        <input type="month" x-model="filterTx.month" class="w-full py-2 px-3 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
-                    </div>
-                    <div class="w-full sm:w-auto ml-auto">
-                        <button @click="openModalTx()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md font-medium text-sm transition flex items-center justify-center shadow-sm">
-                            <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah Transaksi
-                        </button>
-                    </div>
-                </div>
+                    <button type="submit" :disabled="loading.login" class="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors mt-6">
+                        <span x-show="!loading.login">Masuk ke Dashboard</span>
+                        <i x-show="loading.login" class="ph ph-spinner animate-spin text-lg"></i>
+                    </button>
+                </form>
+            </div>
+            <!-- Tombol Dark Mode untuk Login Screen -->
+            <button @click="toggleDarkMode()" class="absolute top-4 right-4 text-gray-400 hover:text-indigo-500 z-20"><i class="ph text-xl" :class="isDarkMode ? 'ph-sun text-yellow-500' : 'ph-moon'"></i></button>
+        </div>
+    </div>
 
-                <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden transition-colors duration-200">
-                    <div class="overflow-x-auto custom-scroll">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tanggal</th>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tipe</th>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Siswa & Kategori</th>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Keterangan</th>
-                                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Jumlah</th>
-                                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi</th>
-                                </tr>
-                            </thead>
-                            <tbody class="bg-white divide-y divide-gray-200">
-                                <template x-for="t in filteredTransaksi" :key="t.id_transaksi">
-                                    <tr class="hover:bg-gray-50 transition">
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600" x-text="t.tanggal"></td>
-                                        <td class="px-6 py-4 whitespace-nowrap">
-                                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full" :class="t.tipe === 'Masuk' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'" x-text="t.tipe"></span>
-                                        </td>
-                                        <td class="px-6 py-4 whitespace-nowrap">
-                                            <div class="text-sm font-medium text-gray-900" x-text="getSiswaName(t.id_siswa)"></div>
-                                            <div class="text-xs text-gray-500" x-text="t.kategori"></div>
-                                        </td>
-                                        <td class="px-6 py-4 text-sm text-gray-500 max-w-xs truncate" x-text="t.keterangan" :title="t.keterangan"></td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-right" :class="t.tipe === 'Masuk' ? 'text-green-600' : 'text-red-600'" x-text="(t.tipe === 'Masuk' ? '+ ' : '- ') + formatCurrency(t.jumlah)"></td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                            <button @click="openModalTx(t)" class="text-indigo-600 hover:text-indigo-900 mr-3" title="Edit"><i class="ph ph-pencil-simple text-lg"></i></button>
-                                            <button @click="deleteTransaksi(t.id_transaksi)" class="text-red-600 hover:text-red-900" title="Hapus"><i class="ph ph-trash text-lg"></i></button>
-                                        </td>
-                                    </tr>
-                                </template>
-                                <tr x-show="filteredTransaksi.length === 0"><td colspan="6" class="px-6 py-10 text-center text-gray-500">Tidak ada transaksi ditemukan.</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+    <!-- ============================================================== -->
+    <!-- MAIN APLIKASI (Tampil jika sudah login)                        -->
+    <!-- ============================================================== -->
+    <div x-show="isLoggedIn" class="flex min-h-screen">
+        
+        <!-- Overlay Mobile -->
+        <div x-show="sidebarOpen" class="fixed inset-0 z-20 bg-black bg-opacity-50 lg:hidden" @click="sidebarOpen = false" x-transition.opacity></div>
+
+        <!-- Sidebar Navigation -->
+        <aside :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'" class="transform fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-gray-200 transition-transform duration-300 ease-in-out lg:translate-x-0 flex flex-col shadow-sm lg:shadow-none">
+            <div class="flex items-center justify-center h-16 border-b border-gray-200 px-4">
+                <i class="ph-fill ph-wallet text-indigo-600 text-2xl mr-2"></i>
+                <h1 class="text-lg font-bold text-gray-800 tracking-tight">E-Keuangan</h1>
+            </div>
+            
+            <div class="px-4 py-4 border-b border-gray-100 flex flex-col items-center justify-center">
+                <div class="h-12 w-12 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xl font-bold mb-2 uppercase" x-text="currentUser?.nama_lengkap.charAt(0)"></div>
+                <p class="text-sm font-semibold text-gray-800 text-center truncate w-full" x-text="currentUser?.nama_lengkap"></p>
+                <div class="mt-1 text-center" x-html="getRoleBadge(currentUser?.role)"></div>
             </div>
 
-        </div>
-    </main>
+            <nav class="flex-1 px-4 py-4 space-y-2 overflow-y-auto">
+                <button @click="changeTab('dashboard')" :class="currentTab === 'dashboard' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-100'" class="w-full flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors">
+                    <i class="ph ph-squares-four text-lg mr-3"></i> Dashboard
+                </button>
+                <button @click="changeTab('siswa')" :class="currentTab === 'siswa' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-100'" class="w-full flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors">
+                    <i class="ph ph-users text-lg mr-3"></i> Data Siswa
+                </button>
+                <button @click="changeTab('transaksi')" :class="currentTab === 'transaksi' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-100'" class="w-full flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors">
+                    <i class="ph ph-swap text-lg mr-3"></i> Transaksi
+                </button>
+                <!-- Menu Data User khusus Admin -->
+                <button x-show="isAdmin()" @click="changeTab('pengguna')" :class="currentTab === 'pengguna' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-100'" class="w-full flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors">
+                    <i class="ph ph-shield-check text-lg mr-3"></i> Data User
+                </button>
+            </nav>
+            <div class="p-4 border-t border-gray-200">
+                <button @click="doLogout()" class="w-full flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-red-600 hover:bg-red-50 transition">
+                    <i class="ph ph-sign-out mr-2 text-lg"></i> Keluar (Logout)
+                </button>
+            </div>
+        </aside>
 
-    <!-- MODAL SISWA (SINGLE INPUT) -->
+        <!-- Main Content -->
+        <main class="flex-1 lg:ml-64 flex flex-col min-h-screen transition-all duration-300 w-full">
+            
+            <!-- Header -->
+            <header class="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 sm:px-6 z-10 sticky top-0 transition-colors duration-200 w-full">
+                <div class="flex items-center">
+                    <button @click="sidebarOpen = true" class="text-gray-500 hover:text-gray-700 focus:outline-none lg:hidden mr-4">
+                        <i class="ph ph-list text-2xl"></i>
+                    </button>
+                    <h2 class="text-xl font-semibold text-gray-800 capitalize" x-text="currentTab.replace('-', ' ')"></h2>
+                </div>
+                <div class="flex items-center">
+                    <button @click="toggleDarkMode()" class="text-gray-500 hover:text-indigo-600 focus:outline-none mr-4 transition-colors" title="Ganti Tema">
+                        <i class="ph text-2xl" :class="isDarkMode ? 'ph-sun text-yellow-500' : 'ph-moon'"></i>
+                    </button>
+                </div>
+            </header>
+
+            <div class="flex-1 p-4 sm:p-6 lg:p-8 overflow-x-hidden w-full">
+                <div x-show="loading.global" class="mb-6 bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded flex items-center">
+                    <i class="ph ph-spinner animate-spin text-xl mr-3"></i> <span>Memproses data dari server...</span>
+                </div>
+
+                <!-- DASHBOARD -->
+                <div x-show="currentTab === 'dashboard'" x-transition.opacity.duration.300ms>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-8">
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex items-center transition-colors duration-200">
+                            <div class="p-3 rounded-full bg-green-100 text-green-600 mr-4"><i class="ph ph-trend-up text-2xl"></i></div>
+                            <div><p class="text-sm font-medium text-gray-500 mb-1">Total Pemasukan</p><h3 class="text-2xl font-bold text-gray-800" x-text="formatCurrency(stats.totalIncome)"></h3></div>
+                        </div>
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex items-center transition-colors duration-200">
+                            <div class="p-3 rounded-full bg-red-100 text-red-600 mr-4"><i class="ph ph-trend-down text-2xl"></i></div>
+                            <div><p class="text-sm font-medium text-gray-500 mb-1">Total Pengeluaran</p><h3 class="text-2xl font-bold text-gray-800" x-text="formatCurrency(stats.totalExpense)"></h3></div>
+                        </div>
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex items-center transition-colors duration-200">
+                            <div class="p-3 rounded-full bg-indigo-100 text-indigo-600 mr-4"><i class="ph ph-scales text-2xl"></i></div>
+                            <div><p class="text-sm font-medium text-gray-500 mb-1">Saldo Bersih</p><h3 class="text-2xl font-bold text-gray-800" x-text="formatCurrency(stats.netBalance)"></h3></div>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-indigo-600 text-white rounded-xl shadow-sm p-6 mb-8 relative overflow-hidden">
+                        <i class="ph ph-shield-check absolute -right-6 -bottom-6 text-9xl text-indigo-500 opacity-30"></i>
+                        <h3 class="text-xl font-bold mb-2 relative z-10" x-text="`Halo, ${currentUser?.nama_lengkap}!`"></h3>
+                        <p class="text-indigo-100 mb-1 relative z-10">Anda masuk menggunakan tingkat akses <strong class="uppercase bg-indigo-800 px-2 py-0.5 rounded text-xs ml-1" x-text="currentUser?.role"></strong>.</p>
+                        <p class="text-sm text-indigo-200 mt-4 relative z-10" x-show="!canEdit()">
+                            <i class="ph ph-info mr-1"></i> Sebagai Guest, Anda hanya dapat melihat data secara baca-saja.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- DATA SISWA -->
+                <div x-show="currentTab === 'siswa'" x-transition.opacity.duration.300ms style="display: none;">
+                    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                        <div class="relative w-full sm:w-64">
+                            <input type="text" x-model="searchSiswa" placeholder="Cari nama atau kelas..." class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition">
+                            <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-gray-400 text-lg"></i>
+                        </div>
+                        
+                        <div class="flex gap-2 w-full sm:w-auto" x-show="canEdit()">
+                            <button @click="openModalImport()" class="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
+                                <i class="ph ph-file-csv mr-2 text-lg"></i> Import CSV
+                            </button>
+                            <button @click="openModalSiswa()" class="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
+                                <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah Siswa
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden transition-colors duration-200 w-full">
+                        <div class="overflow-x-auto custom-scroll w-full">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nama</th>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Kelas</th>
+                                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" x-show="canEdit()">Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    <template x-for="s in filteredSiswa" :key="s.id">
+                                        <tr class="hover:bg-gray-50 transition">
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="s.nama"></td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="s.kelas"></td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium" x-show="canEdit()">
+                                                <button @click="openModalSiswa(s)" class="text-indigo-600 hover:text-indigo-900 mr-3" title="Edit"><i class="ph ph-pencil-simple text-lg"></i></button>
+                                                <button @click="deleteSiswa(s.id)" class="text-red-600 hover:text-red-900" title="Hapus"><i class="ph ph-trash text-lg"></i></button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                    <tr x-show="filteredSiswa.length === 0"><td :colspan="canEdit() ? 3 : 2" class="px-6 py-10 text-center text-gray-500">Tidak ada data siswa.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TRANSAKSI -->
+                <div x-show="currentTab === 'transaksi'" x-transition.opacity.duration.300ms style="display: none;">
+                    <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6 flex flex-wrap gap-4 items-end transition-colors duration-200">
+                        <div class="flex-1" style="min-width: 200px;">
+                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Cari Keterangan / Siswa</label>
+                            <div class="relative">
+                                <input type="text" x-model="filterTx.search" placeholder="Pencarian..." class="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+                                <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-gray-400"></i>
+                            </div>
+                        </div>
+                        <div class="w-full sm:w-auto">
+                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Tipe</label>
+                            <select x-model="filterTx.tipe" class="w-full py-2 px-3 border border-gray-300 bg-white rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+                                <option value="">Semua Tipe</option><option value="Masuk">Pemasukan</option><option value="Keluar">Pengeluaran</option>
+                            </select>
+                        </div>
+                        <div class="w-full sm:w-auto">
+                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Bulan</label>
+                            <input type="month" x-model="filterTx.month" class="w-full py-2 px-3 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+                        </div>
+                        <div class="w-full sm:w-auto ml-auto" x-show="canEdit()">
+                            <button @click="openModalTx()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md font-medium text-sm transition flex items-center justify-center shadow-sm">
+                                <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah Transaksi
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden transition-colors duration-200 w-full">
+                        <div class="overflow-x-auto custom-scroll w-full">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tanggal</th>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tipe</th>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Siswa & Kategori</th>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Keterangan</th>
+                                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Jumlah</th>
+                                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" x-show="canEdit()">Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    <template x-for="t in filteredTransaksi" :key="t.id_transaksi">
+                                        <tr class="hover:bg-gray-50 transition">
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600" x-text="t.tanggal"></td>
+                                            <td class="px-6 py-4 whitespace-nowrap">
+                                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full" :class="t.tipe === 'Masuk' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'" x-text="t.tipe"></span>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap">
+                                                <div class="text-sm font-medium text-gray-900" x-text="getSiswaName(t.id_siswa)"></div>
+                                                <div class="text-xs text-gray-500" x-text="t.kategori"></div>
+                                            </td>
+                                            <td class="px-6 py-4 text-sm text-gray-500 max-w-xs truncate" x-text="t.keterangan" :title="t.keterangan"></td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-right" :class="t.tipe === 'Masuk' ? 'text-green-600' : 'text-red-600'" x-text="(t.tipe === 'Masuk' ? '+ ' : '- ') + formatCurrency(t.jumlah)"></td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium" x-show="canEdit()">
+                                                <button @click="openModalTx(t)" class="text-indigo-600 hover:text-indigo-900 mr-3" title="Edit"><i class="ph ph-pencil-simple text-lg"></i></button>
+                                                <button @click="deleteTransaksi(t.id_transaksi)" class="text-red-600 hover:text-red-900" title="Hapus"><i class="ph ph-trash text-lg"></i></button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                    <tr x-show="filteredTransaksi.length === 0"><td :colspan="canEdit() ? 6 : 5" class="px-6 py-10 text-center text-gray-500">Tidak ada transaksi ditemukan.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- DATA USER PENGGUNA (HANYA ADMIN) -->
+                <div x-show="currentTab === 'pengguna'" x-transition.opacity.duration.300ms style="display: none;">
+                    <div class="flex justify-between items-center mb-6">
+                        <div>
+                            <h3 class="text-lg font-bold text-gray-800">Manajemen Pengguna Aplikasi</h3>
+                            <p class="text-sm text-gray-500">Atur hak akses admin, finance, dan guest.</p>
+                        </div>
+                        <button @click="openModalPengguna()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center shadow-sm">
+                            <i class="ph ph-user-plus mr-2 text-lg"></i> Tambah Akun
+                        </button>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden transition-colors duration-200 w-full">
+                        <div class="overflow-x-auto custom-scroll w-full">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nama & Akun</th>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Hak Akses (Role)</th>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Dibuat Pada</th>
+                                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    <template x-for="u in penggunaList" :key="u.id">
+                                        <tr class="hover:bg-gray-50 transition">
+                                            <td class="px-6 py-4 whitespace-nowrap">
+                                                <div class="text-sm font-medium text-gray-900" x-text="u.nama_lengkap"></div>
+                                                <div class="text-xs text-gray-500">@<span x-text="u.username"></span></div>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap" x-html="getRoleBadge(u.role)"></td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="u.created_at ? new Date(u.created_at).toLocaleDateString() : '-'"></td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                <button @click="openModalPengguna(u)" class="text-indigo-600 hover:text-indigo-900 mr-3" title="Edit"><i class="ph ph-pencil-simple text-lg"></i></button>
+                                                <button @click="deletePengguna(u.id)" class="text-red-600 hover:text-red-900" :disabled="u.id === currentUser?.id" :class="{'opacity-30 cursor-not-allowed': u.id === currentUser?.id}" title="Hapus"><i class="ph ph-trash text-lg"></i></button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- ============================================== -->
+    <!-- SEMUA KUMPULAN MODAL (TERSEMBUNYI SECARA DEFAULT)-->
+    <!-- ============================================== -->
+
+    <!-- MODAL SISWA -->
     <div x-show="modals.siswa" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
         <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:p-0">
             <div x-show="modals.siswa" x-transition.opacity class="fixed inset-0 transition-opacity"><div class="absolute inset-0 bg-gray-500 bg-opacity-75 backdrop-filter backdrop-blur-sm"></div></div>
@@ -592,19 +785,14 @@
             <div x-show="modals.importSiswa" x-transition class="inline-block w-full max-w-md p-6 my-8 overflow-hidden text-left align-middle transition-all transform bg-white rounded-2xl shadow-xl border border-gray-100 relative">
                 <h3 class="text-lg font-bold leading-6 text-gray-900 mb-2">Import Data Siswa (CSV)</h3>
                 <p class="text-sm text-gray-500 mb-4">Upload file .csv yang berisi data siswa. Pastikan format kolom baris pertama adalah <b>Nama</b> dan <b>Kelas</b>.</p>
-                
-                <!-- Tombol Download Template CSV -->
                 <button @click="downloadTemplate()" type="button" class="mb-4 w-full flex justify-center items-center px-4 py-2 border border-indigo-300 text-sm font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 focus:outline-none transition">
                     <i class="ph ph-download-simple mr-2 text-lg"></i> Download Template CSV
                 </button>
-
                 <form @submit.prevent="submitImportSiswa" class="space-y-4 border-t border-gray-200 pt-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">Pilih File CSV</label>
-                        <!-- Form file input standard agar berjalan mulus di semua browser -->
                         <input type="file" accept=".csv" x-ref="fileInput" @change="handleFileSelect" required class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 dark:bg-gray-700 dark:text-gray-300 p-2 border border-gray-300 rounded-md">
                     </div>
-                    
                     <div class="mt-6 flex justify-end gap-3 pt-4">
                         <button type="button" @click="modals.importSiswa = false" class="px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">Batal</button>
                         <button type="submit" class="px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-emerald-600 hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500" :disabled="loading.action">
@@ -678,6 +866,44 @@
                         <button type="button" @click="modals.transaksi = false" class="px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">Batal</button>
                         <button type="submit" class="px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" :disabled="loading.action">
                             <span x-show="!loading.action">Simpan Transaksi</span><i x-show="loading.action" class="ph ph-spinner animate-spin"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL PENGGUNA (AKUN) -->
+    <div x-show="modals.pengguna" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:p-0">
+            <div x-show="modals.pengguna" x-transition.opacity class="fixed inset-0 transition-opacity"><div class="absolute inset-0 bg-gray-500 bg-opacity-75 backdrop-filter backdrop-blur-sm"></div></div>
+            <div x-show="modals.pengguna" x-transition class="inline-block w-full max-w-md p-6 my-8 overflow-hidden text-left align-middle transition-all transform bg-white rounded-2xl shadow-xl border border-gray-100 relative">
+                <h3 class="text-lg font-bold leading-6 text-gray-900 mb-4" x-text="formPengguna.id ? 'Edit Data Akun' : 'Tambah Akun Pengguna'"></h3>
+                <form @submit.prevent="submitPengguna" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Nama Lengkap</label>
+                        <input type="text" x-model="formPengguna.nama_lengkap" required class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Username</label>
+                        <input type="text" x-model="formPengguna.username" required class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Password</label>
+                        <input type="text" x-model="formPengguna.password" required class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Tingkat Hak Akses</label>
+                        <select x-model="formPengguna.role" required class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                            <option value="admin">Administrator (Akses Penuh)</option>
+                            <option value="finance">Finance (Input Siswa & Transaksi)</option>
+                            <option value="guest">Guest (Hanya Melihat Data)</option>
+                        </select>
+                    </div>
+                    <div class="mt-6 flex justify-end gap-3 border-t border-gray-200 pt-4">
+                        <button type="button" @click="modals.pengguna = false" class="px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">Batal</button>
+                        <button type="submit" class="px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" :disabled="loading.action">
+                            <span x-show="!loading.action">Simpan Akun</span><i x-show="loading.action" class="ph ph-spinner animate-spin"></i>
                         </button>
                     </div>
                 </form>
