@@ -25,13 +25,10 @@
 
         function appData() {
             const getEmptySiswa = () => ({ id: '', nama: '', kelas: '' });
-            
-            // Kategori default dikembalikan menjadi SPP
             const getEmptyTx = () => ({ 
                 id_transaksi: '', tipe: 'Masuk', kategori: 'SPP', 
                 id_siswa: null, jumlah: '', keterangan: '', tanggal: new Date().toISOString().split('T')[0]
             });
-            
             const getEmptyPengguna = () => ({ id: '', username: '', password: '', nama_lengkap: '', role: 'guest' });
 
             return {
@@ -46,7 +43,7 @@
                 currentTab: 'dashboard',
                 loading: { global: false, action: false, login: false },
                 toasts: [],
-                modals: { siswa: false, transaksi: false, importSiswa: false, pengguna: false },
+                modals: { siswa: false, transaksi: false, importSiswa: false, importTx: false, pengguna: false },
                 
                 // Data States
                 stats: { totalIncome: 0, totalExpense: 0, netBalance: 0 },
@@ -59,6 +56,7 @@
                 formTx: getEmptyTx(),
                 formPengguna: getEmptyPengguna(),
                 importFile: null,
+                importFileTx: null,
                 searchSiswa: '',
                 filterTx: { search: '', tipe: '', month: '' },
 
@@ -122,7 +120,6 @@
                 },
 
                 canEdit() {
-                    // Admin & Finance bisa edit data operasional (Siswa & Transaksi)
                     return this.currentUser && ['admin', 'finance'].includes(this.currentUser.role);
                 },
 
@@ -188,7 +185,6 @@
                             sbClient.from('transaksi').select('*').order('tanggal', { ascending: false })
                         ];
 
-                        // Hanya fetch data pengguna jika role adalah admin
                         if (this.isAdmin()) {
                             promises.push(sbClient.from('pengguna').select('*').order('nama_lengkap', { ascending: true }));
                         }
@@ -305,7 +301,7 @@
                 },
 
                 // ==========================================
-                // CRUD TRANSAKSI
+                // CRUD TRANSAKSI & IMPORT
                 // ==========================================
                 emptyFormTx() { return getEmptyTx(); },
                 openModalTx(data = null) {
@@ -338,7 +334,7 @@
                 },
 
                 async deleteTransaksi(id) {
-                    if(!this.canEdit() || !confirm("Hapus transaksi ini?")) return;
+                    if(!this.canEdit() || !confirm("Hapus transaksi ini? Aksi ini memengaruhi saldo.")) return;
                     this.loading.global = true;
                     try {
                         const { error } = await sbClient.from('transaksi').delete().eq('id_transaksi', id);
@@ -361,6 +357,73 @@
                             if (!sName.includes(q) && !ket.includes(q)) match = false;
                         }
                         return match;
+                    });
+                },
+
+                openModalImportTx() {
+                    this.importFileTx = null;
+                    if(this.$refs.fileInputTx) this.$refs.fileInputTx.value = '';
+                    this.modals.importTx = true;
+                },
+                handleFileSelectTx(e) { this.importFileTx = e.target.files[0]; },
+                downloadTemplateTx() {
+                    const csvContent = "Tipe,Kategori,Nama Siswa,Jumlah,Tanggal,Keterangan\nMasuk,SPP,Ahmad Faisal,150000,2026-05-01,SPP Bulan Mei\nKeluar,Operasional,,50000,2026-05-02,Beli ATK";
+                    const link = document.createElement("a");
+                    link.setAttribute("href", encodeURI("data:text/csv;charset=utf-8," + csvContent));
+                    link.setAttribute("download", "template_transaksi.csv");
+                    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+                },
+
+                async submitImportTx() {
+                    if (!this.importFileTx) return this.showToast("Pilih file CSV.", "error");
+                    this.loading.action = true;
+                    
+                    Papa.parse(this.importFileTx, {
+                        header: true, skipEmptyLines: true,
+                        complete: async (results) => {
+                            try {
+                                const payload = [];
+                                for (const row of results.data) {
+                                    const tipe = row['Tipe'] || row['tipe'] || row['TIPE'];
+                                    const kategori = row['Kategori'] || row['kategori'] || row['KATEGORI'];
+                                    const namaSiswa = row['Nama Siswa'] || row['nama siswa'] || row['NAMA SISWA'];
+                                    const jumlah = row['Jumlah'] || row['jumlah'] || row['JUMLAH'];
+                                    const tanggal = row['Tanggal'] || row['tanggal'] || row['TANGGAL'];
+                                    const keterangan = row['Keterangan'] || row['keterangan'] || row['KETERANGAN'] || '';
+
+                                    if (!tipe || !kategori || !jumlah || !tanggal) continue; // Abaikan baris yang tidak lengkap
+
+                                    let id_siswa = null;
+                                    if (namaSiswa) {
+                                        // Cari ID siswa di database yang persis namanya
+                                        const found = this.siswaList.find(s => s.nama.toLowerCase() === namaSiswa.trim().toLowerCase());
+                                        if (found) id_siswa = found.id;
+                                    }
+
+                                    payload.push({
+                                        tipe: tipe.trim(),
+                                        kategori: kategori.trim(),
+                                        id_siswa: id_siswa,
+                                        jumlah: parseFloat(jumlah),
+                                        tanggal: tanggal.trim(),
+                                        keterangan: keterangan.trim()
+                                    });
+                                }
+
+                                if (payload.length === 0) throw new Error("Data tidak valid. Pastikan format kolom sesuai template.");
+                                
+                                const { error } = await sbClient.from('transaksi').insert(payload);
+                                if (error) throw error;
+
+                                this.modals.importTx = false;
+                                this.showToast(`${payload.length} data transaksi berhasil diimport.`);
+                                this.loadData();
+                            } catch (e) { 
+                                this.showToast(e.message, 'error'); 
+                            } finally { 
+                                this.loading.action = false; 
+                            }
+                        }
                     });
                 },
 
@@ -441,8 +504,8 @@
         .dark .text-indigo-900 { color: #e0e7ff !important; }
         .dark .bg-green-100 { background-color: rgba(16, 185, 129, 0.15) !important; }
         .dark .text-green-600, .dark .text-green-800 { color: #34d399 !important; }
-        .dark .bg-emerald-600 { background-color: #059669 !important; }
-        .dark .hover\:bg-emerald-700:hover { background-color: #047857 !important; }
+        .dark .bg-green-600 { background-color: #059669 !important; }
+        .dark .hover\:bg-green-700:hover { background-color: #047857 !important; }
         .dark .bg-red-100 { background-color: rgba(239, 68, 68, 0.15) !important; }
         .dark .text-red-600, .dark .text-red-800 { color: #f87171 !important; }
         .dark .bg-blue-50 { background-color: rgba(59, 130, 246, 0.15) !important; border-color: rgba(59, 130, 246, 0.3) !important; }
@@ -600,10 +663,10 @@
                         </div>
                         
                         <div class="flex gap-2 w-full sm:w-auto" x-show="canEdit()">
-                            <button @click="openModalImport()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
+                            <button @click="openModalImport()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-file-csv mr-2 text-lg"></i> Import CSV
                             </button>
-                            <button @click="openModalSiswa()" class="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
+                            <button @click="openModalSiswa()" class="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah Siswa
                             </button>
                         </div>
@@ -657,8 +720,13 @@
                             <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Bulan</label>
                             <input type="month" x-model="filterTx.month" class="w-full py-2 px-3 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
                         </div>
-                        <div class="w-full sm:w-auto ml-auto" x-show="canEdit()">
-                            <button @click="openModalTx()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md font-medium text-sm transition flex items-center justify-center shadow-sm">
+                        
+                        <!-- Kumpulan Tombol Transaksi -->
+                        <div class="w-full sm:w-auto ml-auto flex gap-2" x-show="canEdit()">
+                            <button @click="openModalImportTx()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md font-medium text-sm transition flex items-center justify-center shadow-sm">
+                                <i class="ph ph-file-csv mr-2 text-lg"></i> Import CSV
+                            </button>
+                            <button @click="openModalTx()" class="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah Transaksi
                             </button>
                         </div>
@@ -816,7 +884,7 @@
                 <form @submit.prevent="submitTransaksi" class="space-y-4">
                     <div class="pb-4 border-b border-gray-200">
                         <label class="block text-sm font-medium text-gray-700 mb-2">Jenis Transaksi</label>
-                        <!-- Logika reset diubah di sini: Pemasukan defaultnya menjadi "SPP" -->
+                        <!-- Pemasukan defaultnya menjadi "SPP" -->
                         <select x-model="formTx.tipe" @change="formTx.id_siswa = ''; formTx.kategori = formTx.tipe === 'Masuk' ? 'SPP' : 'Operasional';" required class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-gray-50 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-base font-semibold text-gray-800">
                             <option value="Masuk">Pemasukan</option><option value="Keluar">Pengeluaran</option>
                         </select>
@@ -825,14 +893,12 @@
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Kategori</label>
                             <select x-model="formTx.kategori" required class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                                <!-- Opsi Pemasukan yang Baru dengan SPP -->
                                 <option value="SPP" x-show="formTx.tipe === 'Masuk'">SPP</option>
                                 <option value="Katering" x-show="formTx.tipe === 'Masuk'">Katering</option>
                                 <option value="Madin" x-show="formTx.tipe === 'Masuk'">Madin</option>
                                 <option value="Gedung & Pondok" x-show="formTx.tipe === 'Masuk'">Gedung & Pondok</option>
                                 <option value="Lainnya" x-show="formTx.tipe === 'Masuk'">Lainnya</option>
                                 
-                                <!-- Opsi Pengeluaran -->
                                 <option value="Operasional" x-show="formTx.tipe === 'Keluar'">Operasional</option>
                                 <option value="Gaji" x-show="formTx.tipe === 'Keluar'">Honor / Gaji</option>
                                 <option value="Lainnya" x-show="formTx.tipe === 'Keluar'">Lainnya (Pengeluaran)</option>
@@ -875,6 +941,32 @@
                         <button type="button" @click="modals.transaksi = false" class="px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">Batal</button>
                         <button type="submit" class="px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" :disabled="loading.action">
                             <span x-show="!loading.action">Simpan Transaksi</span><i x-show="loading.action" class="ph ph-spinner animate-spin"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL IMPORT TRANSAKSI (CSV) -->
+    <div x-show="modals.importTx" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:p-0">
+            <div x-show="modals.importTx" x-transition.opacity class="fixed inset-0 transition-opacity"><div class="absolute inset-0 bg-gray-500 bg-opacity-75 backdrop-filter backdrop-blur-sm"></div></div>
+            <div x-show="modals.importTx" x-transition class="inline-block w-full max-w-md p-6 my-8 overflow-hidden text-left align-middle transition-all transform bg-white rounded-2xl shadow-xl border border-gray-100 relative">
+                <h3 class="text-lg font-bold leading-6 text-gray-900 mb-2">Import Data Transaksi (CSV)</h3>
+                <p class="text-sm text-gray-500 mb-4">Pastikan nama kolom di baris pertama Excel Anda sama persis dengan yang ada pada template.</p>
+                <button @click="downloadTemplateTx()" type="button" class="mb-4 w-full flex justify-center items-center px-4 py-2 border border-indigo-300 text-sm font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 focus:outline-none transition">
+                    <i class="ph ph-download-simple mr-2 text-lg"></i> Download Template CSV
+                </button>
+                <form @submit.prevent="submitImportTx" class="space-y-4 border-t border-gray-200 pt-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Pilih File CSV</label>
+                        <input type="file" accept=".csv" x-ref="fileInputTx" @change="handleFileSelectTx" required class="block w-full text-sm text-gray-500 p-2 border border-gray-300 rounded-md bg-gray-50 dark:bg-gray-700 dark:text-gray-300">
+                    </div>
+                    <div class="mt-6 flex justify-end gap-3 pt-4">
+                        <button type="button" @click="modals.importTx = false" class="px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">Batal</button>
+                        <button type="submit" class="px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500" :disabled="loading.action">
+                            <span x-show="!loading.action">Import Data</span><i x-show="loading.action" class="ph ph-spinner animate-spin"></i>
                         </button>
                     </div>
                 </form>
