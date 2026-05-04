@@ -18,14 +18,10 @@
     <script>
         // INISIALISASI SUPABASE
         const supabaseUrl = 'https://vkdbdrltnfwqqaazusrl.supabase.co';
-        
-        // CATATAN: Pastikan key di bawah ini berawalan "eyJhb...", ambil di menu Settings > API > Project API keys (anon)
         const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZrZGJkcmx0bmZ3cXFhYXp1c3JsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NzA2NDMsImV4cCI6MjA5MzQ0NjY0M30.x4as8jMj8TVzXqNoKktrfMe3KTMm27-LIzZT_sMiU5Y'; 
         
-        const isConfigured = supabaseUrl.startsWith('https://');
-        
-        // Kita deklarasikan variabel tanpa langsung memanggilnya, agar tidak memblokir UI jika gagal
-        let supabase = null;
+        // Ganti nama variabel menjadi sbClient agar TIDAK BENTROK dengan CDN Supabase
+        let sbClient = null;
 
         function appData() {
             const getEmptySiswa = () => ({ id: '', nama: '', kelas: '' });
@@ -55,17 +51,15 @@
                 filterTx: { search: '', tipe: '', month: '' },
 
                 initApp() {
-                    // Kita jalankan Supabase di dalam fungsi ini agar UI tetap aman dirender
                     try {
-                        if (!isConfigured) {
-                            this.showToast("URL Supabase belum dikonfigurasi dengan benar.", "error");
-                        } else if (!window.supabase) {
-                            this.showToast("Koneksi ke server Supabase gagal. Periksa jaringan Anda.", "error");
+                        if (!window.supabase) {
+                            this.showToast("Koneksi ke server Supabase gagal dimuat dari CDN.", "error");
                         } else {
-                            supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+                            // Gunakan sbClient
+                            sbClient = window.supabase.createClient(supabaseUrl, supabaseKey);
                         }
                     } catch (e) {
-                        this.showToast("Gagal menginisialisasi database: " + e.message, "error");
+                        this.showToast("Error sistem: " + e.message, "error");
                     }
 
                     if (localStorage.getItem('eKeuanganTheme') === 'dark') {
@@ -73,8 +67,7 @@
                         document.body.classList.add('dark');
                     }
                     
-                    // Lanjut muat data jika supabase berhasil dibuat
-                    if (supabase) this.loadData();
+                    if (sbClient) this.loadData();
                 },
 
                 toggleDarkMode() {
@@ -117,19 +110,14 @@
                     }, 3000);
                 },
 
-                // ==========================
-                // SUPABASE CRUD OPERATIONS
-                // ==========================
-
                 async loadData() {
                     this.loading.global = true;
                     try {
                         const [resSiswa, resTx] = await Promise.all([
-                            supabase.from('siswa').select('*').order('nama', { ascending: true }),
-                            supabase.from('transaksi').select('*').order('tanggal', { ascending: false })
+                            sbClient.from('siswa').select('*').order('nama', { ascending: true }),
+                            sbClient.from('transaksi').select('*').order('tanggal', { ascending: false })
                         ]);
 
-                        // Tampilkan error otorisasi/API jika ada
                         if (resSiswa.error) throw resSiswa.error;
                         if (resTx.error) throw resTx.error;
 
@@ -151,7 +139,6 @@
                     }
                 },
 
-                // CRUD SISWA
                 emptyFormSiswa() { return getEmptySiswa(); },
                 openModalSiswa(data = null) {
                     this.formSiswa = data ? { ...data } : this.emptyFormSiswa();
@@ -162,12 +149,12 @@
                     this.loading.action = true;
                     try {
                         if (this.formSiswa.id) {
-                            const { error } = await supabase.from('siswa')
+                            const { error } = await sbClient.from('siswa')
                                 .update({ nama: this.formSiswa.nama, kelas: this.formSiswa.kelas })
                                 .eq('id', this.formSiswa.id);
                             if (error) throw error;
                         } else {
-                            const { error } = await supabase.from('siswa')
+                            const { error } = await sbClient.from('siswa')
                                 .insert([{ nama: this.formSiswa.nama, kelas: this.formSiswa.kelas }]);
                             if (error) throw error;
                         }
@@ -184,7 +171,7 @@
                     if (!confirm("Hapus data siswa ini?")) return;
                     this.loading.global = true;
                     try {
-                        const { error } = await supabase.from('siswa').delete().eq('id', id);
+                        const { error } = await sbClient.from('siswa').delete().eq('id', id);
                         if (error) throw error;
                         this.showToast("Siswa dihapus.");
                         this.loadData();
@@ -197,13 +184,11 @@
                 get filteredSiswa() {
                     if (!this.searchSiswa) return this.siswaList;
                     const q = this.searchSiswa.toLowerCase();
-                    // Pencegahan error null di database
                     return this.siswaList.filter(s => 
                         (s.nama || '').toLowerCase().includes(q) || (s.kelas || '').toLowerCase().includes(q)
                     );
                 },
 
-                // CRUD TRANSAKSI
                 emptyFormTx() { return getEmptyTx(); },
                 openModalTx(data = null) {
                     this.formTx = data ? { ...data } : this.emptyFormTx();
@@ -223,10 +208,10 @@
                         };
 
                         if (this.formTx.id_transaksi) {
-                            const { error } = await supabase.from('transaksi').update(payload).eq('id_transaksi', this.formTx.id_transaksi);
+                            const { error } = await sbClient.from('transaksi').update(payload).eq('id_transaksi', this.formTx.id_transaksi);
                             if (error) throw error;
                         } else {
-                            const { error } = await supabase.from('transaksi').insert([payload]);
+                            const { error } = await sbClient.from('transaksi').insert([payload]);
                             if (error) throw error;
                         }
                         this.modals.transaksi = false;
@@ -242,7 +227,7 @@
                     if (!confirm("Hapus transaksi ini? Aksi ini memengaruhi saldo.")) return;
                     this.loading.global = true;
                     try {
-                        const { error } = await supabase.from('transaksi').delete().eq('id_transaksi', id);
+                        const { error } = await sbClient.from('transaksi').delete().eq('id_transaksi', id);
                         if (error) throw error;
                         this.showToast("Transaksi dihapus.");
                         this.loadData();
@@ -260,7 +245,6 @@
                         
                         if (this.filterTx.search) {
                             const q = this.filterTx.search.toLowerCase();
-                            // Pencegahan error null dari database
                             const sName = (this.getSiswaName(t.id_siswa) || '').toLowerCase();
                             const ket = (t.keterangan || '').toLowerCase();
                             if (!sName.includes(q) && !ket.includes(q)) match = false;
