@@ -15,7 +15,6 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 
-    <!-- Application Logic (Alpine.js) -->
     <script>
         // INISIALISASI SUPABASE
         const supabaseUrl = 'https://vkdbdrltnfwqqaazusrl.supabase.co';
@@ -58,6 +57,7 @@
                 importFile: null,
                 importFileTx: null,
                 searchSiswa: '',
+                filterKelasSiswa: '', // State baru untuk menyimpan pilihan filter kelas
                 filterTx: { search: '', tipe: '', month: '' },
 
                 initApp() {
@@ -217,7 +217,7 @@
                 },
 
                 // ==========================================
-                // CRUD SISWA & IMPORT
+                // CRUD SISWA & IMPORT & FILTERS
                 // ==========================================
                 emptyFormSiswa() { return getEmptySiswa(); },
                 openModalSiswa(data = null) {
@@ -255,10 +255,36 @@
                     this.loading.global = false;
                 },
 
+                // Getter untuk mendapatkan daftar kelas yang unik dari data siswa
+                get uniqueKelasList() {
+                    // Ambil semua kelas, hilangkan yang kosong, lalu buat jadi unique (Set), dan urutkan
+                    const classes = this.siswaList.map(s => s.kelas).filter(Boolean);
+                    return [...new Set(classes)].sort();
+                },
+
+                // Logika Filter Siswa yang diperbarui (Search + Filter Kelas)
                 get filteredSiswa() {
-                    if (!this.searchSiswa) return this.siswaList;
-                    const q = this.searchSiswa.toLowerCase();
-                    return this.siswaList.filter(s => (s.nama || '').toLowerCase().includes(q) || (s.kelas || '').toLowerCase().includes(q));
+                    return this.siswaList.filter(s => {
+                        let match = true;
+                        
+                        // Cek filter berdasarkan dropdown kelas
+                        if (this.filterKelasSiswa && s.kelas !== this.filterKelasSiswa) {
+                            match = false;
+                        }
+
+                        // Cek filter berdasarkan text search (Nama atau Kelas)
+                        if (this.searchSiswa) {
+                            const q = this.searchSiswa.toLowerCase();
+                            const nama = (s.nama || '').toLowerCase();
+                            const kelas = (s.kelas || '').toLowerCase();
+                            
+                            if (!nama.includes(q) && !kelas.includes(q)) {
+                                match = false;
+                            }
+                        }
+
+                        return match;
+                    });
                 },
 
                 openModalImport() {
@@ -298,6 +324,36 @@
                             finally { this.loading.action = false; }
                         }
                     });
+                },
+
+                exportSiswaCSV() {
+                    if (this.filteredSiswa.length === 0) {
+                        return this.showToast("Tidak ada data siswa untuk diexport.", "error");
+                    }
+                    
+                    // Kita export data sesuai dengan filter (pencarian/kelas) yang sedang aktif
+                    const dataToExport = this.filteredSiswa.map(s => ({
+                        'Nama': s.nama,
+                        'Kelas': s.kelas
+                    }));
+
+                    // Gunakan PapaParse untuk konversi array objek ke format string CSV
+                    const csv = Papa.unparse(dataToExport);
+                    
+                    // Buat blob dan trigger download
+                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                    const link = document.createElement("a");
+                    link.href = URL.createObjectURL(blob);
+                    
+                    // Nama file otomatis mengikuti tanggal saat ini
+                    const dateStr = new Date().toISOString().split('T')[0];
+                    link.download = `Data_Siswa_${dateStr}.csv`;
+                    
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    
+                    this.showToast("Data siswa berhasil diexport!");
                 },
 
                 // ==========================================
@@ -656,22 +712,46 @@
 
                 <!-- DATA SISWA -->
                 <div x-show="currentTab === 'siswa'" x-transition.opacity.duration.300ms style="display: none;">
-                    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-                        <div class="relative w-full sm:w-64">
-                            <input type="text" x-model="searchSiswa" placeholder="Cari nama atau kelas..." class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition">
-                            <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-gray-400 text-lg"></i>
+                    
+                    <!-- Area Pencarian dan Filter -->
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 w-full">
+                        
+                        <div class="flex flex-col sm:flex-row gap-3 w-full md:w-auto flex-1">
+                            <!-- Input Pencarian (Nama/Kelas) -->
+                            <div class="relative w-full sm:w-64">
+                                <input type="text" x-model="searchSiswa" placeholder="Cari nama atau kelas..." class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition appearance-none">
+                                <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-gray-400 text-lg"></i>
+                            </div>
+                            
+                            <!-- Dropdown Filter Kelas -->
+                            <div class="relative w-full sm:w-48">
+                                <select x-model="filterKelasSiswa" class="w-full pl-4 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition appearance-none bg-white dark:bg-gray-800 cursor-pointer">
+                                    <option value="">Semua Kelas</option>
+                                    <template x-for="kelas in uniqueKelasList" :key="kelas">
+                                        <option :value="kelas" x-text="kelas"></option>
+                                    </template>
+                                </select>
+                                <i class="ph ph-caret-down absolute right-3 top-2.5 text-gray-400 text-lg pointer-events-none"></i>
+                            </div>
                         </div>
                         
-                        <div class="flex gap-2 w-full sm:w-auto" x-show="canEdit()">
-                            <button @click="openModalImport()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md font-medium text-sm transition flex items-center justify-center shadow-sm">
+                        <!-- Tombol Aksi -->
+                        <div class="flex gap-2 w-full md:w-auto flex-wrap sm:flex-nowrap">
+                            <!-- Tombol Export selalu muncul (bisa untuk Guest) -->
+                            <button @click="exportSiswaCSV()" class="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
+                                <i class="ph ph-export mr-2 text-lg"></i> Export CSV
+                            </button>
+                            <!-- Import dan Tambah hanya untuk Admin/Finance -->
+                            <button x-show="canEdit()" @click="openModalImport()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-file-csv mr-2 text-lg"></i> Import CSV
                             </button>
-                            <button @click="openModalSiswa()" class="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md font-medium text-sm transition flex items-center justify-center shadow-sm">
+                            <button x-show="canEdit()" @click="openModalSiswa()" class="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah Siswa
                             </button>
                         </div>
                     </div>
 
+                    <!-- Tabel Data Siswa -->
                     <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden transition-colors duration-200 w-full">
                         <div class="overflow-x-auto custom-scroll w-full">
                             <table class="min-w-full divide-y divide-gray-200">
@@ -686,14 +766,16 @@
                                     <template x-for="s in filteredSiswa" :key="s.id">
                                         <tr class="hover:bg-gray-50 transition">
                                             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="s.nama"></td>
-                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="s.kelas"></td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                <span class="bg-gray-100 text-gray-800 text-xs font-medium mr-2 px-2.5 py-0.5 rounded dark:bg-gray-700 dark:text-gray-300" x-text="s.kelas"></span>
+                                            </td>
                                             <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium" x-show="canEdit()">
                                                 <button @click="openModalSiswa(s)" class="text-indigo-600 hover:text-indigo-900 mr-3" title="Edit"><i class="ph ph-pencil-simple text-lg"></i></button>
                                                 <button @click="deleteSiswa(s.id)" class="text-red-600 hover:text-red-900" title="Hapus"><i class="ph ph-trash text-lg"></i></button>
                                             </td>
                                         </tr>
                                     </template>
-                                    <tr x-show="filteredSiswa.length === 0"><td :colspan="canEdit() ? 3 : 2" class="px-6 py-10 text-center text-gray-500">Tidak ada data siswa.</td></tr>
+                                    <tr x-show="filteredSiswa.length === 0"><td :colspan="canEdit() ? 3 : 2" class="px-6 py-10 text-center text-gray-500">Tidak ada data siswa ditemukan.</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -706,27 +788,27 @@
                         <div class="flex-1" style="min-width: 200px;">
                             <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Cari Keterangan / Siswa</label>
                             <div class="relative">
-                                <input type="text" x-model="filterTx.search" placeholder="Pencarian..." class="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+                                <input type="text" x-model="filterTx.search" placeholder="Pencarian..." class="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 text-sm">
                                 <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-gray-400"></i>
                             </div>
                         </div>
                         <div class="w-full sm:w-auto">
                             <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Tipe</label>
-                            <select x-model="filterTx.tipe" class="w-full py-2 px-3 border border-gray-300 bg-white rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+                            <select x-model="filterTx.tipe" class="w-full py-2 px-3 border border-gray-300 bg-white rounded-lg focus:ring-indigo-500 focus:border-indigo-500 text-sm">
                                 <option value="">Semua Tipe</option><option value="Masuk">Pemasukan</option><option value="Keluar">Pengeluaran</option>
                             </select>
                         </div>
                         <div class="w-full sm:w-auto">
                             <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Bulan</label>
-                            <input type="month" x-model="filterTx.month" class="w-full py-2 px-3 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+                            <input type="month" x-model="filterTx.month" class="w-full py-2 px-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 text-sm">
                         </div>
                         
                         <!-- Kumpulan Tombol Transaksi -->
                         <div class="w-full sm:w-auto ml-auto flex gap-2" x-show="canEdit()">
-                            <button @click="openModalImportTx()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md font-medium text-sm transition flex items-center justify-center shadow-sm">
+                            <button @click="openModalImportTx()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-file-csv mr-2 text-lg"></i> Import CSV
                             </button>
-                            <button @click="openModalTx()" class="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md font-medium text-sm transition flex items-center justify-center shadow-sm">
+                            <button @click="openModalTx()" class="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah Transaksi
                             </button>
                         </div>
