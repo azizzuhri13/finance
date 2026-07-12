@@ -347,10 +347,15 @@
                     if(!this.canEdit()) return;
                     this.loading.action = true;
                     try {
+                        // PAYLOAD DIUPDATE: Menambahkan dibuat_oleh dengan nama user aktif
                         const payload = {
-                            tipe: this.formTx.tipe, kategori: this.formTx.kategori,
+                            tipe: this.formTx.tipe, 
+                            kategori: this.formTx.kategori,
                             id_siswa: this.formTx.id_siswa === '' ? null : this.formTx.id_siswa,
-                            jumlah: this.formTx.jumlah, tanggal: this.formTx.tanggal, keterangan: this.formTx.keterangan
+                            jumlah: this.formTx.jumlah, 
+                            tanggal: this.formTx.tanggal, 
+                            keterangan: this.formTx.keterangan,
+                            dibuat_oleh: this.currentUser.nama_lengkap // <-- FIELD BARU (NAMA PETUGAS)
                         };
 
                         if (this.formTx.id_transaksi) {
@@ -388,7 +393,8 @@
                             const q = this.filterTx.search.toLowerCase();
                             const sName = (this.getSiswaName(t.id_siswa) || '').toLowerCase();
                             const ket = (t.keterangan || '').toLowerCase();
-                            if (!sName.includes(q) && !ket.includes(q)) match = false;
+                            const petugas = (t.dibuat_oleh || '').toLowerCase();
+                            if (!sName.includes(q) && !ket.includes(q) && !petugas.includes(q)) match = false;
                         }
                         return match;
                     });
@@ -407,7 +413,8 @@
                         'Kategori': t.kategori,
                         'Nama Siswa': this.getSiswaName(t.id_siswa),
                         'Keterangan': t.keterangan || '-',
-                        'Jumlah': t.jumlah
+                        'Jumlah': t.jumlah,
+                        'Petugas': t.dibuat_oleh || '-' // <-- TAMBAHAN EXPORT
                     }));
 
                     // Gunakan PapaParse untuk konversi array objek ke format string CSV
@@ -474,7 +481,8 @@
                                         id_siswa: id_siswa,
                                         jumlah: parseFloat(jumlah),
                                         tanggal: tanggal.trim(),
-                                        keterangan: keterangan.trim()
+                                        keterangan: keterangan.trim(),
+                                        dibuat_oleh: this.currentUser.nama_lengkap // Set pengimport sebagai petugas
                                     });
                                 }
 
@@ -840,6 +848,7 @@
                                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tipe</th>
                                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Siswa & Kategori</th>
                                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Keterangan</th>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Petugas</th> <!-- KOLOM PETUGAS BARU -->
                                         <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Jumlah</th>
                                         <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" x-show="canEdit()">Aksi</th>
                                     </tr>
@@ -856,6 +865,12 @@
                                                 <div class="text-xs text-gray-500" x-text="t.kategori"></div>
                                             </td>
                                             <td class="px-6 py-4 text-sm text-gray-500 max-w-xs truncate" x-text="t.keterangan" :title="t.keterangan"></td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500"> <!-- TAMPILAN PETUGAS -->
+                                                <div class="flex items-center text-gray-500">
+                                                    <i class="ph ph-user mr-1" x-show="t.dibuat_oleh"></i>
+                                                    <span x-text="t.dibuat_oleh || '-'"></span>
+                                                </div>
+                                            </td>
                                             <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-right" :class="t.tipe === 'Masuk' ? 'text-green-600' : 'text-red-600'" x-text="(t.tipe === 'Masuk' ? '+ ' : '- ') + formatCurrency(t.jumlah)"></td>
                                             <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium" x-show="canEdit()">
                                                 <button @click="openModalTx(t)" class="text-indigo-600 hover:text-indigo-900 mr-3" title="Edit"><i class="ph ph-pencil-simple text-lg"></i></button>
@@ -863,7 +878,7 @@
                                             </td>
                                         </tr>
                                     </template>
-                                    <tr x-show="filteredTransaksi.length === 0"><td :colspan="canEdit() ? 6 : 5" class="px-6 py-10 text-center text-gray-500">Tidak ada transaksi ditemukan.</td></tr>
+                                    <tr x-show="filteredTransaksi.length === 0"><td :colspan="canEdit() ? 7 : 6" class="px-6 py-10 text-center text-gray-500">Tidak ada transaksi ditemukan.</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -1035,6 +1050,16 @@
                         <label class="block text-sm font-medium text-gray-700">Keterangan</label>
                         <textarea x-model="formTx.keterangan" rows="2" class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"></textarea>
                     </div>
+                    
+                    <!-- INFO PETUGAS (USER AKTIF) -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Petugas (Pencatat)</label>
+                        <div class="mt-1 flex items-center px-3 py-2 border border-gray-200 bg-gray-100 rounded-md shadow-sm sm:text-sm text-gray-600 cursor-not-allowed">
+                            <i class="ph ph-user-circle mr-2 text-lg"></i>
+                            <span x-text="currentUser?.nama_lengkap"></span>
+                        </div>
+                    </div>
+
                     <div class="mt-6 flex justify-end gap-3 border-t border-gray-200 pt-4">
                         <button type="button" @click="modals.transaksi = false" class="px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">Batal</button>
                         <button type="submit" class="px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" :disabled="loading.action">
