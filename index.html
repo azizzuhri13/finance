@@ -255,34 +255,21 @@
                     this.loading.global = false;
                 },
 
-                // Getter untuk mendapatkan daftar kelas yang unik dari data siswa
                 get uniqueKelasList() {
-                    // Ambil semua kelas, hilangkan yang kosong, lalu buat jadi unique (Set), dan urutkan
                     const classes = this.siswaList.map(s => s.kelas).filter(Boolean);
                     return [...new Set(classes)].sort();
                 },
 
-                // Logika Filter Siswa yang diperbarui (Search + Filter Kelas)
                 get filteredSiswa() {
                     return this.siswaList.filter(s => {
                         let match = true;
-                        
-                        // Cek filter berdasarkan dropdown kelas
-                        if (this.filterKelasSiswa && s.kelas !== this.filterKelasSiswa) {
-                            match = false;
-                        }
-
-                        // Cek filter berdasarkan text search (Nama atau Kelas)
+                        if (this.filterKelasSiswa && s.kelas !== this.filterKelasSiswa) match = false;
                         if (this.searchSiswa) {
                             const q = this.searchSiswa.toLowerCase();
                             const nama = (s.nama || '').toLowerCase();
                             const kelas = (s.kelas || '').toLowerCase();
-                            
-                            if (!nama.includes(q) && !kelas.includes(q)) {
-                                match = false;
-                            }
+                            if (!nama.includes(q) && !kelas.includes(q)) match = false;
                         }
-
                         return match;
                     });
                 },
@@ -330,34 +317,25 @@
                     if (this.filteredSiswa.length === 0) {
                         return this.showToast("Tidak ada data siswa untuk diexport.", "error");
                     }
-                    
-                    // Kita export data sesuai dengan filter (pencarian/kelas) yang sedang aktif
                     const dataToExport = this.filteredSiswa.map(s => ({
                         'Nama': s.nama,
                         'Kelas': s.kelas
                     }));
 
-                    // Gunakan PapaParse untuk konversi array objek ke format string CSV
                     const csv = Papa.unparse(dataToExport);
-                    
-                    // Buat blob dan trigger download
                     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                     const link = document.createElement("a");
                     link.href = URL.createObjectURL(blob);
                     
-                    // Nama file otomatis mengikuti tanggal saat ini
                     const dateStr = new Date().toISOString().split('T')[0];
                     link.download = `Data_Siswa_${dateStr}.csv`;
                     
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                    
+                    document.body.appendChild(link); link.click(); document.body.removeChild(link);
                     this.showToast("Data siswa berhasil diexport!");
                 },
 
                 // ==========================================
-                // CRUD TRANSAKSI & IMPORT
+                // CRUD TRANSAKSI & EXPORT/IMPORT
                 // ==========================================
                 emptyFormTx() { return getEmptyTx(); },
                 openModalTx(data = null) {
@@ -416,6 +394,41 @@
                     });
                 },
 
+                // Fitur Export CSV Transaksi
+                exportTransaksiCSV() {
+                    if (this.filteredTransaksi.length === 0) {
+                        return this.showToast("Tidak ada data transaksi untuk diexport.", "error");
+                    }
+                    
+                    // Kita export data sesuai dengan filter (pencarian/bulan/tipe) yang sedang aktif
+                    const dataToExport = this.filteredTransaksi.map(t => ({
+                        'Tanggal': t.tanggal,
+                        'Tipe': t.tipe,
+                        'Kategori': t.kategori,
+                        'Nama Siswa': this.getSiswaName(t.id_siswa),
+                        'Keterangan': t.keterangan || '-',
+                        'Jumlah': t.jumlah
+                    }));
+
+                    // Gunakan PapaParse untuk konversi array objek ke format string CSV
+                    const csv = Papa.unparse(dataToExport);
+                    
+                    // Buat blob dan trigger download
+                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                    const link = document.createElement("a");
+                    link.href = URL.createObjectURL(blob);
+                    
+                    // Nama file otomatis mengikuti tanggal saat ini
+                    const dateStr = new Date().toISOString().split('T')[0];
+                    link.download = `Data_Transaksi_${dateStr}.csv`;
+                    
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    
+                    this.showToast("Data transaksi berhasil diexport!");
+                },
+
                 openModalImportTx() {
                     this.importFileTx = null;
                     if(this.$refs.fileInputTx) this.$refs.fileInputTx.value = '';
@@ -447,11 +460,10 @@
                                     const tanggal = row['Tanggal'] || row['tanggal'] || row['TANGGAL'];
                                     const keterangan = row['Keterangan'] || row['keterangan'] || row['KETERANGAN'] || '';
 
-                                    if (!tipe || !kategori || !jumlah || !tanggal) continue; // Abaikan baris yang tidak lengkap
+                                    if (!tipe || !kategori || !jumlah || !tanggal) continue; 
 
                                     let id_siswa = null;
                                     if (namaSiswa) {
-                                        // Cari ID siswa di database yang persis namanya
                                         const found = this.siswaList.find(s => s.nama.toLowerCase() === namaSiswa.trim().toLowerCase());
                                         if (found) id_siswa = found.id;
                                     }
@@ -804,11 +816,16 @@
                         </div>
                         
                         <!-- Kumpulan Tombol Transaksi -->
-                        <div class="w-full sm:w-auto ml-auto flex gap-2" x-show="canEdit()">
-                            <button @click="openModalImportTx()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
+                        <div class="w-full sm:w-auto ml-auto flex flex-wrap sm:flex-nowrap gap-2">
+                            <!-- Export bisa diakses semua role -->
+                            <button @click="exportTransaksiCSV()" class="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
+                                <i class="ph ph-export mr-2 text-lg"></i> Export CSV
+                            </button>
+                            <!-- Import dan Tambah hanya untuk Admin/Finance -->
+                            <button x-show="canEdit()" @click="openModalImportTx()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-file-csv mr-2 text-lg"></i> Import CSV
                             </button>
-                            <button @click="openModalTx()" class="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
+                            <button x-show="canEdit()" @click="openModalTx()" class="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah Transaksi
                             </button>
                         </div>
@@ -966,7 +983,6 @@
                 <form @submit.prevent="submitTransaksi" class="space-y-4">
                     <div class="pb-4 border-b border-gray-200">
                         <label class="block text-sm font-medium text-gray-700 mb-2">Jenis Transaksi</label>
-                        <!-- Pemasukan defaultnya menjadi "SPP" -->
                         <select x-model="formTx.tipe" @change="formTx.id_siswa = ''; formTx.kategori = formTx.tipe === 'Masuk' ? 'SPP' : 'Operasional';" required class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-gray-50 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-base font-semibold text-gray-800">
                             <option value="Masuk">Pemasukan</option><option value="Keluar">Pengeluaran</option>
                         </select>
