@@ -25,10 +25,11 @@
         function appData() {
             const getEmptySiswa = () => ({ id: '', nama: '', kelas: '' });
             const getEmptyTx = () => ({ 
-                id_transaksi: '', tipe: 'Masuk', kategori: 'SPP', 
+                id_transaksi: '', tipe: 'Masuk', kategori: '', 
                 id_siswa: null, jumlah: '', keterangan: '', tanggal: new Date().toISOString().split('T')[0]
             });
             const getEmptyPengguna = () => ({ id: '', username: '', password: '', nama_lengkap: '', role: 'guest' });
+            const getEmptyKategori = () => ({ id: '', nama: '', tipe: 'Masuk' }); // State kosong untuk kategori
 
             return {
                 // Auth & Theme States
@@ -42,7 +43,7 @@
                 currentTab: 'dashboard',
                 loading: { global: false, action: false, login: false },
                 toasts: [],
-                modals: { siswa: false, transaksi: false, importSiswa: false, importTx: false, pengguna: false },
+                modals: { siswa: false, transaksi: false, importSiswa: false, importTx: false, pengguna: false, kategori: false },
                 
                 // Data States
                 stats: { totalIncome: 0, totalExpense: 0, netBalance: 0 },
@@ -50,14 +51,24 @@
                 transaksiList: [],
                 penggunaList: [],
                 
+                // Kategori Default (digunakan jika tabel belum dibuat/kosong)
+                kategoriList: [
+                    { id: '1', nama: 'SPP', tipe: 'Masuk' },
+                    { id: '2', nama: 'Katering', tipe: 'Masuk' },
+                    { id: '3', nama: 'Madin', tipe: 'Masuk' },
+                    { id: '4', nama: 'Operasional', tipe: 'Keluar' },
+                    { id: '5', nama: 'Honor / Gaji', tipe: 'Keluar' }
+                ],
+                
                 // Form & Filter States
                 formSiswa: getEmptySiswa(),
                 formTx: getEmptyTx(),
                 formPengguna: getEmptyPengguna(),
+                formKategori: getEmptyKategori(), // Form untuk kategori
                 importFile: null,
                 importFileTx: null,
                 searchSiswa: '',
-                filterKelasSiswa: '', // State baru untuk menyimpan pilihan filter kelas
+                filterKelasSiswa: '', 
                 filterTx: { search: '', tipe: '', month: '' },
 
                 initApp() {
@@ -201,6 +212,14 @@
                             if (results[2].error) throw results[2].error;
                             this.penggunaList = results[2].data || [];
                         }
+
+                        // Mengambil Data Kategori (Dipisah agar jika tabel belum ada, tidak merusak aplikasi)
+                        try {
+                            const resKat = await sbClient.from('kategori').select('*').order('nama', { ascending: true });
+                            if (!resKat.error && resKat.data && resKat.data.length > 0) {
+                                this.kategoriList = resKat.data;
+                            }
+                        } catch (ek) { console.warn("Tabel kategori mungkin belum dibuat.", ek); }
                         
                         let income = 0, expense = 0;
                         this.transaksiList.forEach(t => {
@@ -335,19 +354,80 @@
                 },
 
                 // ==========================================
+                // CRUD KATEGORI TRANSAKSI
+                // ==========================================
+                resetFormKategori() {
+                    this.formKategori = getEmptyKategori();
+                },
+                editKategori(k) {
+                    this.formKategori = { ...k };
+                },
+                async submitKategori() {
+                    if(!this.canEdit()) return;
+                    this.loading.action = true;
+                    try {
+                        if (this.formKategori.id && typeof this.formKategori.id !== 'string') {
+                            // Cek type id (integer auto-increment atau uuid) untuk update
+                            const { error } = await sbClient.from('kategori').update({ 
+                                nama: this.formKategori.nama, tipe: this.formKategori.tipe 
+                            }).eq('id', this.formKategori.id);
+                            if (error) throw error;
+                        } else if (this.formKategori.id && this.formKategori.id.length > 5) { // Anggap UUID
+                             const { error } = await sbClient.from('kategori').update({ 
+                                nama: this.formKategori.nama, tipe: this.formKategori.tipe 
+                            }).eq('id', this.formKategori.id);
+                            if (error) throw error;
+                        } else {
+                            // Insert baru
+                            const { error } = await sbClient.from('kategori').insert([{ 
+                                nama: this.formKategori.nama, tipe: this.formKategori.tipe 
+                            }]);
+                            if (error) throw error;
+                        }
+                        this.resetFormKategori();
+                        this.showToast("Kategori berhasil disimpan.");
+                        this.loadData();
+                    } catch(e) { 
+                        this.showToast("Gagal. Pastikan tabel 'kategori' sudah dibuat: " + e.message, 'error'); 
+                    }
+                    this.loading.action = false;
+                },
+                async deleteKategori(id) {
+                    if(!this.canEdit() || !confirm("Hapus kategori ini? Pastikan kategori ini belum dipakai di transaksi agar data tetap rapi.")) return;
+                    try {
+                        const { error } = await sbClient.from('kategori').delete().eq('id', id);
+                        if (error) throw error;
+                        this.showToast("Kategori dihapus.");
+                        this.loadData();
+                    } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
+                },
+
+                // ==========================================
                 // CRUD TRANSAKSI & EXPORT/IMPORT
                 // ==========================================
-                emptyFormTx() { return getEmptyTx(); },
+                emptyFormTx() { 
+                    const empty = getEmptyTx();
+                    // Set default kategori dari array kategori list yang ada
+                    const defaultKatMasuk = this.kategoriList.filter(k => k.tipe === 'Masuk');
+                    if (defaultKatMasuk.length > 0) empty.kategori = defaultKatMasuk[0].nama;
+                    return empty;
+                },
                 openModalTx(data = null) {
                     this.formTx = data ? { ...data } : this.emptyFormTx();
                     this.modals.transaksi = true;
+                },
+                
+                // Helper saat tipe transaksi berubah di form
+                onTipeTxChange() {
+                    this.formTx.id_siswa = ''; 
+                    const availableCats = this.kategoriList.filter(k => k.tipe === this.formTx.tipe);
+                    this.formTx.kategori = availableCats.length > 0 ? availableCats[0].nama : '';
                 },
 
                 async submitTransaksi() {
                     if(!this.canEdit()) return;
                     this.loading.action = true;
                     try {
-                        // PAYLOAD DIUPDATE: Menambahkan dibuat_oleh dengan nama user aktif
                         const payload = {
                             tipe: this.formTx.tipe, 
                             kategori: this.formTx.kategori,
@@ -355,7 +435,7 @@
                             jumlah: this.formTx.jumlah, 
                             tanggal: this.formTx.tanggal, 
                             keterangan: this.formTx.keterangan,
-                            dibuat_oleh: this.currentUser.nama_lengkap // <-- FIELD BARU (NAMA PETUGAS)
+                            dibuat_oleh: this.currentUser.nama_lengkap 
                         };
 
                         if (this.formTx.id_transaksi) {
@@ -406,7 +486,6 @@
                         return this.showToast("Tidak ada data transaksi untuk diexport.", "error");
                     }
                     
-                    // Kita export data sesuai dengan filter (pencarian/bulan/tipe) yang sedang aktif
                     const dataToExport = this.filteredTransaksi.map(t => ({
                         'Tanggal': t.tanggal,
                         'Tipe': t.tipe,
@@ -414,18 +493,13 @@
                         'Nama Siswa': this.getSiswaName(t.id_siswa),
                         'Keterangan': t.keterangan || '-',
                         'Jumlah': t.jumlah,
-                        'Petugas': t.dibuat_oleh || '-' // <-- TAMBAHAN EXPORT
+                        'Petugas': t.dibuat_oleh || '-'
                     }));
 
-                    // Gunakan PapaParse untuk konversi array objek ke format string CSV
                     const csv = Papa.unparse(dataToExport);
-                    
-                    // Buat blob dan trigger download
                     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                     const link = document.createElement("a");
                     link.href = URL.createObjectURL(blob);
-                    
-                    // Nama file otomatis mengikuti tanggal saat ini
                     const dateStr = new Date().toISOString().split('T')[0];
                     link.download = `Data_Transaksi_${dateStr}.csv`;
                     
@@ -482,7 +556,7 @@
                                         jumlah: parseFloat(jumlah),
                                         tanggal: tanggal.trim(),
                                         keterangan: keterangan.trim(),
-                                        dibuat_oleh: this.currentUser.nama_lengkap // Set pengimport sebagai petugas
+                                        dibuat_oleh: this.currentUser.nama_lengkap
                                     });
                                 }
 
@@ -594,11 +668,10 @@
 <body class="bg-gray-50 text-gray-800 font-sans antialiased transition-colors duration-200" x-data="appData()" x-init="initApp()" x-cloak>
 
     <!-- ============================================================== -->
-    <!-- HALAMAN LOGIN (Tampil jika belum login)                        -->
+    <!-- HALAMAN LOGIN -->
     <!-- ============================================================== -->
     <div x-show="!isLoggedIn" class="min-h-screen flex items-center justify-center p-4">
         <div class="max-w-md w-full bg-white rounded-2xl shadow-xl border border-gray-100 p-8 relative overflow-hidden transition-colors duration-200">
-            <!-- Dekorasi background -->
             <div class="absolute -top-24 -right-24 w-48 h-48 bg-indigo-50 rounded-full blur-3xl opacity-50"></div>
             <div class="absolute -bottom-24 -left-24 w-48 h-48 bg-blue-50 rounded-full blur-3xl opacity-50"></div>
             
@@ -632,20 +705,17 @@
                     </button>
                 </form>
             </div>
-            <!-- Tombol Dark Mode untuk Login Screen -->
             <button @click="toggleDarkMode()" class="absolute top-4 right-4 text-gray-400 hover:text-indigo-500 z-20"><i class="ph text-xl" :class="isDarkMode ? 'ph-sun text-yellow-500' : 'ph-moon'"></i></button>
         </div>
     </div>
 
     <!-- ============================================================== -->
-    <!-- MAIN APLIKASI (Tampil jika sudah login)                        -->
+    <!-- MAIN APLIKASI -->
     <!-- ============================================================== -->
     <div x-show="isLoggedIn" class="flex min-h-screen">
         
-        <!-- Overlay Mobile -->
         <div x-show="sidebarOpen" class="fixed inset-0 z-20 bg-black bg-opacity-50 lg:hidden" @click="sidebarOpen = false" x-transition.opacity></div>
 
-        <!-- Sidebar Navigation -->
         <aside :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'" class="transform fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-gray-200 transition-transform duration-300 ease-in-out lg:translate-x-0 flex flex-col shadow-sm lg:shadow-none">
             <div class="flex items-center justify-center h-16 border-b border-gray-200 px-4">
                 <i class="ph-fill ph-wallet text-indigo-600 text-2xl mr-2"></i>
@@ -668,7 +738,6 @@
                 <button @click="changeTab('transaksi')" :class="currentTab === 'transaksi' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-100'" class="w-full flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors">
                     <i class="ph ph-swap text-lg mr-3"></i> Transaksi
                 </button>
-                <!-- Menu Data User khusus Admin -->
                 <button x-show="isAdmin()" @click="changeTab('pengguna')" :class="currentTab === 'pengguna' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-100'" class="w-full flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors">
                     <i class="ph ph-shield-check text-lg mr-3"></i> Data User
                 </button>
@@ -680,10 +749,7 @@
             </div>
         </aside>
 
-        <!-- Main Content -->
         <main class="flex-1 lg:ml-64 flex flex-col min-h-screen transition-all duration-300 w-full">
-            
-            <!-- Header -->
             <header class="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 sm:px-6 z-10 sticky top-0 transition-colors duration-200 w-full">
                 <div class="flex items-center">
                     <button @click="sidebarOpen = true" class="text-gray-500 hover:text-gray-700 focus:outline-none lg:hidden mr-4">
@@ -732,18 +798,12 @@
 
                 <!-- DATA SISWA -->
                 <div x-show="currentTab === 'siswa'" x-transition.opacity.duration.300ms style="display: none;">
-                    
-                    <!-- Area Pencarian dan Filter -->
                     <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 w-full">
-                        
                         <div class="flex flex-col sm:flex-row gap-3 w-full md:w-auto flex-1">
-                            <!-- Input Pencarian (Nama/Kelas) -->
                             <div class="relative w-full sm:w-64">
                                 <input type="text" x-model="searchSiswa" placeholder="Cari nama atau kelas..." class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition appearance-none">
                                 <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-gray-400 text-lg"></i>
                             </div>
-                            
-                            <!-- Dropdown Filter Kelas -->
                             <div class="relative w-full sm:w-48">
                                 <select x-model="filterKelasSiswa" class="w-full pl-4 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition appearance-none bg-white dark:bg-gray-800 cursor-pointer">
                                     <option value="">Semua Kelas</option>
@@ -754,14 +814,10 @@
                                 <i class="ph ph-caret-down absolute right-3 top-2.5 text-gray-400 text-lg pointer-events-none"></i>
                             </div>
                         </div>
-                        
-                        <!-- Tombol Aksi -->
                         <div class="flex gap-2 w-full md:w-auto flex-wrap sm:flex-nowrap">
-                            <!-- Tombol Export selalu muncul (bisa untuk Guest) -->
                             <button @click="exportSiswaCSV()" class="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-export mr-2 text-lg"></i> Export CSV
                             </button>
-                            <!-- Import dan Tambah hanya untuk Admin/Finance -->
                             <button x-show="canEdit()" @click="openModalImport()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-file-csv mr-2 text-lg"></i> Import CSV
                             </button>
@@ -771,7 +827,6 @@
                         </div>
                     </div>
 
-                    <!-- Tabel Data Siswa -->
                     <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden transition-colors duration-200 w-full">
                         <div class="overflow-x-auto custom-scroll w-full">
                             <table class="min-w-full divide-y divide-gray-200">
@@ -823,13 +878,10 @@
                             <input type="month" x-model="filterTx.month" class="w-full py-2 px-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 text-sm">
                         </div>
                         
-                        <!-- Kumpulan Tombol Transaksi -->
                         <div class="w-full sm:w-auto ml-auto flex flex-wrap sm:flex-nowrap gap-2">
-                            <!-- Export bisa diakses semua role -->
                             <button @click="exportTransaksiCSV()" class="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-export mr-2 text-lg"></i> Export CSV
                             </button>
-                            <!-- Import dan Tambah hanya untuk Admin/Finance -->
                             <button x-show="canEdit()" @click="openModalImportTx()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center justify-center shadow-sm">
                                 <i class="ph ph-file-csv mr-2 text-lg"></i> Import CSV
                             </button>
@@ -848,7 +900,7 @@
                                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tipe</th>
                                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Siswa & Kategori</th>
                                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Keterangan</th>
-                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Petugas</th> <!-- KOLOM PETUGAS BARU -->
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Petugas</th>
                                         <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Jumlah</th>
                                         <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider" x-show="canEdit()">Aksi</th>
                                     </tr>
@@ -865,7 +917,7 @@
                                                 <div class="text-xs text-gray-500" x-text="t.kategori"></div>
                                             </td>
                                             <td class="px-6 py-4 text-sm text-gray-500 max-w-xs truncate" x-text="t.keterangan" :title="t.keterangan"></td>
-                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500"> <!-- TAMPILAN PETUGAS -->
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                                 <div class="flex items-center text-gray-500">
                                                     <i class="ph ph-user mr-1" x-show="t.dibuat_oleh"></i>
                                                     <span x-text="t.dibuat_oleh || '-'"></span>
@@ -934,8 +986,69 @@
     </div>
 
     <!-- ============================================== -->
-    <!-- SEMUA KUMPULAN MODAL (TERSEMBUNYI SECARA DEFAULT)-->
+    <!-- SEMUA KUMPULAN MODAL -->
     <!-- ============================================== -->
+
+    <!-- MODAL KELOLA KATEGORI (BARU) -->
+    <div x-show="modals.kategori" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:p-0">
+            <div x-show="modals.kategori" x-transition.opacity class="fixed inset-0 transition-opacity"><div class="absolute inset-0 bg-gray-500 bg-opacity-75 backdrop-filter backdrop-blur-sm"></div></div>
+            <div x-show="modals.kategori" x-transition class="inline-block w-full max-w-md p-6 my-8 overflow-hidden text-left align-middle transition-all transform bg-white rounded-2xl shadow-xl border border-gray-100 relative">
+                
+                <div class="flex justify-between items-center mb-4 pb-3 border-b border-gray-200">
+                    <h3 class="text-lg font-bold leading-6 text-gray-900">Kelola Kategori Transaksi</h3>
+                    <button @click="modals.kategori = false" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
+                </div>
+                
+                <!-- Form Tambah/Edit Kategori -->
+                <form @submit.prevent="submitKategori" class="mb-4 bg-gray-50 p-3 rounded-lg border border-gray-200">
+                    <div class="flex gap-2 items-end">
+                        <div class="flex-1">
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Tipe</label>
+                            <select x-model="formKategori.tipe" required class="w-full py-1.5 px-2 border border-gray-300 rounded text-sm focus:ring-indigo-500 focus:border-indigo-500">
+                                <option value="Masuk">Masuk</option><option value="Keluar">Keluar</option>
+                            </select>
+                        </div>
+                        <div class="flex-1">
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Nama Kategori</label>
+                            <input type="text" x-model="formKategori.nama" required placeholder="Contoh: Beli ATK" class="w-full py-1.5 px-2 border border-gray-300 rounded text-sm focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded text-sm font-medium transition" :disabled="loading.action">
+                            <span x-show="!formKategori.id">Tambah</span>
+                            <span x-show="formKategori.id">Simpan</span>
+                        </button>
+                        <button type="button" x-show="formKategori.id" @click="resetFormKategori()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-2 py-1.5 rounded text-sm transition" title="Batal Edit"><i class="ph ph-x"></i></button>
+                    </div>
+                </form>
+
+                <!-- List Kategori yang Ada -->
+                <div class="max-h-60 overflow-y-auto custom-scroll border border-gray-200 rounded-lg">
+                    <table class="min-w-full divide-y divide-gray-200 text-sm">
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            <template x-for="k in kategoriList" :key="k.id">
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-2 whitespace-nowrap font-medium text-gray-800" x-text="k.nama"></td>
+                                    <td class="px-4 py-2 whitespace-nowrap">
+                                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full" :class="k.tipe === 'Masuk' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'" x-text="k.tipe"></span>
+                                    </td>
+                                    <td class="px-4 py-2 whitespace-nowrap text-right text-gray-500">
+                                        <button @click="editKategori(k)" class="text-indigo-600 hover:text-indigo-900 mr-2" title="Edit"><i class="ph ph-pencil-simple"></i></button>
+                                        <button @click="deleteKategori(k.id)" class="text-red-600 hover:text-red-900" title="Hapus"><i class="ph ph-trash"></i></button>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="mt-4 text-xs text-gray-500 flex items-start">
+                    <i class="ph-fill ph-warning-circle text-yellow-500 text-base mr-1"></i>
+                    <p>Jika tabel database belum dibuat, aplikasi hanya akan menyimpan perubahan ini sementara di memori browser.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
 
     <!-- MODAL SISWA -->
     <div x-show="modals.siswa" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
@@ -998,25 +1111,30 @@
                 <form @submit.prevent="submitTransaksi" class="space-y-4">
                     <div class="pb-4 border-b border-gray-200">
                         <label class="block text-sm font-medium text-gray-700 mb-2">Jenis Transaksi</label>
-                        <select x-model="formTx.tipe" @change="formTx.id_siswa = ''; formTx.kategori = formTx.tipe === 'Masuk' ? 'SPP' : 'Operasional';" required class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-gray-50 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-base font-semibold text-gray-800">
+                        <select x-model="formTx.tipe" @change="onTipeTxChange()" required class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-gray-50 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-base font-semibold text-gray-800">
                             <option value="Masuk">Pemasukan</option><option value="Keluar">Pengeluaran</option>
                         </select>
                     </div>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                        
+                        <!-- KATEGORI DIUBAH MENJADI DINAMIS -->
                         <div>
-                            <label class="block text-sm font-medium text-gray-700">Kategori</label>
+                            <div class="flex justify-between items-center">
+                                <label class="block text-sm font-medium text-gray-700">Kategori</label>
+                                <!-- Tombol Buka Modal Kategori -->
+                                <button type="button" @click="modals.kategori = true; modals.transaksi = false;" class="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center focus:outline-none">
+                                    <i class="ph ph-gear mr-1"></i> Kelola
+                                </button>
+                            </div>
                             <select x-model="formTx.kategori" required class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                                <option value="SPP" x-show="formTx.tipe === 'Masuk'">SPP</option>
-                                <option value="Katering" x-show="formTx.tipe === 'Masuk'">Katering</option>
-                                <option value="Madin" x-show="formTx.tipe === 'Masuk'">Madin</option>
-                                <option value="Gedung & Pondok" x-show="formTx.tipe === 'Masuk'">Gedung & Pondok</option>
-                                <option value="Lainnya" x-show="formTx.tipe === 'Masuk'">Lainnya</option>
-                                
-                                <option value="Operasional" x-show="formTx.tipe === 'Keluar'">Operasional</option>
-                                <option value="Gaji" x-show="formTx.tipe === 'Keluar'">Honor / Gaji</option>
-                                <option value="Lainnya" x-show="formTx.tipe === 'Keluar'">Lainnya (Pengeluaran)</option>
+                                <template x-for="kat in kategoriList.filter(k => k.tipe === formTx.tipe)" :key="kat.id">
+                                    <option :value="kat.nama" x-text="kat.nama"></option>
+                                </template>
+                                <!-- Muncul jika tidak ada kategori tersisa -->
+                                <option value="" x-show="kategoriList.filter(k => k.tipe === formTx.tipe).length === 0">-- Buat Kategori Dulu --</option>
                             </select>
                         </div>
+                        
                         <div x-show="formTx.tipe === 'Masuk'" x-data="{ dropdownOpen: false, search: '' }" class="relative">
                             <label class="block text-sm font-medium text-gray-700">Nama Siswa</label>
                             <button type="button" @click="dropdownOpen = !dropdownOpen; if(dropdownOpen) { $nextTick(() => $refs.searchInput.focus()); search = ''; }" @click.outside="dropdownOpen = false" class="mt-1 flex items-center justify-between w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm text-left">
@@ -1051,7 +1169,6 @@
                         <textarea x-model="formTx.keterangan" rows="2" class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"></textarea>
                     </div>
                     
-                    <!-- INFO PETUGAS (USER AKTIF) -->
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Petugas (Pencatat)</label>
                         <div class="mt-1 flex items-center px-3 py-2 border border-gray-200 bg-gray-100 rounded-md shadow-sm sm:text-sm text-gray-600 cursor-not-allowed">
@@ -1146,3 +1263,19 @@
     </div>
 </body>
 </html>
+```
+
+### Langkah WAJIB di Supabase (Agar tidak Error):
+
+Sama seperti fitur `dibuat_oleh` sebelumnya, karena sekarang kategori akan disimpan ke database agar tidak hilang saat di-refresh, **Anda wajib membuat 1 tabel baru di Supabase Anda.**
+
+1. Masuk ke **Supabase** -> **Table Editor** -> **Create a new table**.
+2. Beri nama tabel: **`kategori`**
+3. Matikan opsi *Enable Row Level Security (RLS)* jika Anda belum mengonfigurasinya.
+4. Pada bagian kolom (Columns), atur seperti ini:
+   * Kolom 1: `id` (sudah otomatis ada bawaan Supabase)
+   * Kolom 2: klik **Add Column**, beri nama **`nama`**, pilih tipe `text`
+   * Kolom 3: klik **Add Column**, beri nama **`tipe`**, pilih tipe `text`
+5. Klik **Save**.
+
+*Catatan: Saya sudah menambahkan sedikit fitur keamanannya, di mana jika Anda belum sempat membuat tabelnya, aplikasinya tidak akan error layar putih, melainkan akan menggunakan memori sementara browser agar Anda tetap bisa beraktivitas.*
