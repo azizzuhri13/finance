@@ -34,8 +34,7 @@
                     items: [{ kategori: '', jumlah: '', keterangan: '' }]
                 };
             };
-            // Mengubah username menjadi email untuk kompatibilitas Supabase Auth
-            const getEmptyPengguna = () => ({ id: '', email: '', password: '', nama_lengkap: '', role: 'guest' });
+            const getEmptyPengguna = () => ({ id: '', email: '', nama_lengkap: '', role: 'guest' });
             const getEmptyKategori = () => ({ id: '', nama: '', tipe: 'Masuk' }); 
 
             return {
@@ -43,14 +42,15 @@
                 isDarkMode: false,
                 isLoggedIn: false,
                 currentUser: null,
-                loginForm: { email: '', password: '' }, // Diubah ke email
+                loginForm: { email: '', password: '' },
+                formUbahPassword: { passwordBaru: '', konfirmasiPassword: '' },
 
                 // UI States
                 sidebarOpen: false,
                 currentTab: 'dashboard',
                 loading: { global: false, action: false, login: false, siswa: false, tx: false },
                 toasts: [],
-                modals: { siswa: false, transaksi: false, importSiswa: false, importTx: false, pengguna: false, kategori: false },
+                modals: { siswa: false, transaksi: false, importSiswa: false, importTx: false, pengguna: false, kategori: false, ubahPassword: false },
                 
                 // Base Data States
                 stats: { totalIncome: 0, totalExpense: 0, netBalance: 0 },
@@ -62,11 +62,11 @@
                 allTxForChart: [], 
                 printData: null,
 
-                // Reference Data (Lightweight mapping for joins)
+                // Reference Data
                 siswaDict: {},
                 uniqueKelasList: [],
 
-                // Pagination & Data States (Siswa)
+                // Pagination Siswa
                 siswaList: [],
                 pageSiswa: 1,
                 limitSiswa: 50,
@@ -74,7 +74,7 @@
                 searchSiswa: '',
                 filterKelasSiswa: '', 
 
-                // Pagination & Data States (Transaksi)
+                // Pagination Transaksi
                 transaksiList: [],
                 pageTx: 1,
                 limitTx: 50,
@@ -102,19 +102,22 @@
                         document.body.classList.add('dark');
                     }
 
-                    // MENGGUNAKAN SUPABASE AUTH SESSION MANAGEMENT (Lebih Aman dari localStorage manual)
+                    // Cek Sesi Autentikasi yang Sedang Aktif
                     if (sbClient) {
                         const { data: { session }, error } = await sbClient.auth.getSession();
                         if (session) {
                             await this.loadProfileFromSession(session);
                         }
 
-                        // Listen to Auth Changes (misal token expired atau logout di tab lain)
+                        // Listen to Auth Changes
                         sbClient.auth.onAuthStateChange(async (event, session) => {
                             if (event === 'SIGNED_OUT') {
                                 this.isLoggedIn = false;
                                 this.currentUser = null;
                                 this.currentTab = 'dashboard';
+                            } else if (event === 'PASSWORD_RECOVERY') {
+                                // Fitur untuk lupa password (jika diaktifkan di supabase)
+                                this.modals.ubahPassword = true;
                             }
                         });
                     }
@@ -123,31 +126,31 @@
                 async loadProfileFromSession(session) {
                     this.loading.global = true;
                     try {
-                        // Mengambil role dan data profil dari tabel pengguna berdasarkan email
+                        // Ambil profil dari tabel pengguna (sinkronisasi dengan Trigger database)
                         const { data: profile, error } = await sbClient.from('pengguna')
                             .select('*')
                             .eq('email', session.user.email)
                             .single();
 
-                        if (error) throw new Error("Profil tidak ditemukan di database. Hubungi Admin.");
+                        if (error) {
+                            console.warn("Profil belum ada di tabel pengguna, menunggu trigger/sync...");
+                            // Fallback jika belum masuk ke tabel public.pengguna
+                            this.currentUser = { ...session.user, email: session.user.email, nama_lengkap: 'User (Menunggu Sync)', role: 'guest' };
+                        } else {
+                            this.currentUser = { ...session.user, ...profile };
+                        }
                         
-                        this.currentUser = { ...session.user, ...profile };
                         this.isLoggedIn = true;
                         this.loadInitialData();
                     } catch (e) {
                         this.showToast(e.message, 'error');
-                        sbClient.auth.signOut();
                     }
                     this.loading.global = false;
                 },
 
-                // ==========================================
-                // SECURE AUTHENTICATION LOGIC
-                // ==========================================
                 async doLogin() {
                     this.loading.login = true;
                     try {
-                        // 1. Login menggunakan Supabase Auth (Mengenkripsi password secara otomatis)
                         const { data: authData, error: authError } = await sbClient.auth.signInWithPassword({
                             email: this.loginForm.email,
                             password: this.loginForm.password
@@ -155,11 +158,10 @@
                         
                         if (authError) throw new Error("Email atau password salah!");
 
-                        // 2. Load Profile (Role dll)
                         await this.loadProfileFromSession(authData.session);
                         
                         this.loginForm = { email: '', password: '' };
-                        this.showToast(`Selamat datang, ${this.currentUser.nama_lengkap}!`);
+                        this.showToast(`Berhasil masuk!`);
                     } catch (e) {
                         this.showToast(e.message, 'error');
                     }
@@ -172,14 +174,35 @@
                     this.loading.global = false;
                 },
 
-                // Fungsi ini sekarang hanya untuk UI Toggling (menyembunyikan tombol). 
-                // Keamanan sebenarnya (Penolakan Query) sekarang di-handle oleh RLS di database.
+                // Fungsi Ubah Password Langsung dari Dashboard
+                async submitUbahPassword() {
+                    if (this.formUbahPassword.passwordBaru !== this.formUbahPassword.konfirmasiPassword) {
+                        return this.showToast("Password baru dan konfirmasi tidak cocok!", "error");
+                    }
+                    if (this.formUbahPassword.passwordBaru.length < 6) {
+                        return this.showToast("Password minimal terdiri dari 6 karakter!", "error");
+                    }
+
+                    this.loading.action = true;
+                    try {
+                        const { data, error } = await sbClient.auth.updateUser({
+                            password: this.formUbahPassword.passwordBaru
+                        });
+
+                        if (error) throw error;
+
+                        this.showToast("Password Anda berhasil diubah secara aman!");
+                        this.modals.ubahPassword = false;
+                        this.formUbahPassword = { passwordBaru: '', konfirmasiPassword: '' };
+                    } catch (e) {
+                        this.showToast("Gagal mengubah password: " + e.message, "error");
+                    }
+                    this.loading.action = false;
+                },
+
                 canEdit() { return this.currentUser && ['admin', 'finance'].includes(this.currentUser.role); },
                 isAdmin() { return this.currentUser && this.currentUser.role === 'admin'; },
 
-                // ==========================================
-                // UTILITIES
-                // ==========================================
                 toggleDarkMode() {
                     this.isDarkMode = !this.isDarkMode;
                     if (this.isDarkMode) {
@@ -222,9 +245,6 @@
                     setTimeout(() => { this.toasts = this.toasts.filter(t => t.id !== id); }, 3000);
                 },
 
-                // ==========================================
-                // OPTIMIZED DATA FETCHING (PAGINATION)
-                // ==========================================
                 async loadInitialData() {
                     this.loading.global = true;
                     try {
@@ -280,18 +300,15 @@
                     this.loading.siswa = true;
                     try {
                         let query = sbClient.from('siswa').select('*', { count: 'exact' });
-
                         if (this.filterKelasSiswa) query = query.eq('kelas', this.filterKelasSiswa);
                         if (this.searchSiswa) {
                             query = query.or(`nama.ilike.%${this.searchSiswa}%,kelas.ilike.%${this.searchSiswa}%`);
                         }
-
                         const from = (this.pageSiswa - 1) * this.limitSiswa;
                         const to = from + this.limitSiswa - 1;
                         query = query.range(from, to).order('nama', { ascending: true });
 
                         const { data, count, error } = await query;
-                        // Jika akses ditolak karena RLS (contoh: guest coba fetch semua, meskipun policy kita izinkan select)
                         if (error) throw error;
                         
                         this.siswaList = data || [];
@@ -311,7 +328,6 @@
                     this.loading.tx = true;
                     try {
                         let query = sbClient.from('transaksi').select('*', { count: 'exact' });
-
                         if (this.filterTx.tipe) query = query.eq('tipe', this.filterTx.tipe);
                         if (this.filterTx.month) {
                             const start = `${this.filterTx.month}-01`;
@@ -343,9 +359,6 @@
                     this.loadTransaksi();
                 },
 
-                // ==========================================
-                // FITUR CHART & CETAK
-                // ==========================================
                 updateChart() {
                     if (this.chartInstance) this.chartInstance.destroy();
                     
@@ -398,9 +411,6 @@
                     setTimeout(() => { window.print(); }, 300);
                 },
 
-                // ==========================================
-                // CRUD SISWA
-                // ==========================================
                 emptyFormSiswa() { return getEmptySiswa(); },
                 openModalSiswa(data = null) {
                     this.formSiswa = data ? { ...data } : this.emptyFormSiswa();
@@ -412,7 +422,7 @@
                     try {
                         if (this.formSiswa.id) {
                             const { error } = await sbClient.from('siswa').update({ nama: this.formSiswa.nama, kelas: this.formSiswa.kelas }).eq('id', this.formSiswa.id);
-                            if (error) throw error; // Jika RLS menolak, akan dilempar ke sini
+                            if (error) throw error;
                         } else {
                             const { error } = await sbClient.from('siswa').insert([{ nama: this.formSiswa.nama, kelas: this.formSiswa.kelas }]);
                             if (error) throw error;
@@ -422,7 +432,6 @@
                         this.loadSiswa(); 
                         this.loadReferences(); 
                     } catch(e) { 
-                        // Pesan RLS akan muncul di sini jika ada upaya bobol
                         this.showToast("Gagal: Akses Ditolak oleh Server. " + e.message, 'error'); 
                     }
                     this.loading.action = false;
@@ -438,7 +447,6 @@
                     } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
                 },
 
-                // EXPORT & IMPORT SISWA
                 async exportSiswaCSV() {
                     this.showToast("Mengambil data untuk diexport...", "info");
                     let query = sbClient.from('siswa').select('*');
@@ -497,9 +505,6 @@
                     });
                 },
 
-                // ==========================================
-                // CRUD KATEGORI TRANSAKSI
-                // ==========================================
                 resetFormKategori() { this.formKategori = getEmptyKategori(); },
                 editKategori(k) { this.formKategori = { ...k }; },
                 async submitKategori() {
@@ -536,9 +541,6 @@
                     } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
                 },
 
-                // ==========================================
-                // CRUD TRANSAKSI
-                // ==========================================
                 emptyFormTx() { 
                     const empty = getEmptyTx();
                     const defaultKatMasuk = this.kategoriList.filter(k => k.tipe === 'Masuk');
@@ -611,7 +613,6 @@
                     } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
                 },
 
-                // EXPORT & IMPORT TRANSAKSI
                 async exportTransaksiCSV() {
                     this.showToast("Mengambil data untuk diexport...", "info");
                     let query = sbClient.from('transaksi').select('*');
@@ -707,9 +708,6 @@
                     });
                 },
 
-                // ==========================================
-                // CRUD PENGGUNA (HANYA MENGUBAH ROLE - ADMIN ONLY)
-                // ==========================================
                 emptyFormPengguna() { return getEmptyPengguna(); },
                 openModalPengguna(data = null) {
                     this.formPengguna = data ? { ...data } : this.emptyFormPengguna();
@@ -720,19 +718,16 @@
                     this.loading.action = true;
                     try {
                         const payload = {
-                            email: this.formPengguna.email,
                             nama_lengkap: this.formPengguna.nama_lengkap, 
                             role: this.formPengguna.role
                         };
+                        
                         if (this.formPengguna.id) {
                             const { error } = await sbClient.from('pengguna').update(payload).eq('id', this.formPengguna.id);
                             if (error) throw error;
-                            this.showToast("Role pengguna diperbarui.");
+                            this.showToast("Profil/Role pengguna diperbarui.");
                         } else {
-                            // Untuk pengguna baru, insert ke tabel profil
-                            const { error } = await sbClient.from('pengguna').insert([payload]);
-                            if (error) throw error;
-                            this.showToast("Profil ditambahkan. (Ingat untuk membuat Auth di Dashboard Supabase)");
+                            this.showToast("Gagal: Fitur Tambah Akun dipindah ke Dashboard Supabase Auth", "error");
                         }
                         this.modals.pengguna = false;
                         
@@ -742,7 +737,7 @@
                     this.loading.action = false;
                 },
                 async deletePengguna(id) {
-                    if(!this.isAdmin() || !confirm("Hapus profil user ini? (Ini hanya menghapus profil, hapus Auth di Dashboard Supabase)")) return;
+                    if(!this.isAdmin() || !confirm("Hapus profil user ini? (Ini HANYA menghapus data Profil. Menghapus akses masuk harus lewat Supabase Auth)")) return;
                     if(id === this.currentUser.id) return this.showToast("Tidak bisa menghapus profil sendiri!", "error");
                     try {
                         const { error } = await sbClient.from('pengguna').delete().eq('id', id);
@@ -863,7 +858,12 @@
             <div class="px-4 py-4 border-b border-gray-100 flex flex-col items-center justify-center">
                 <div class="h-12 w-12 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xl font-bold mb-2 uppercase" x-text="currentUser?.nama_lengkap?.charAt(0) || 'U'"></div>
                 <p class="text-sm font-semibold text-gray-800 text-center truncate w-full" x-text="currentUser?.nama_lengkap"></p>
-                <div class="mt-1 text-center" x-html="getRoleBadge(currentUser?.role)"></div>
+                <div class="mt-1 mb-2 text-center" x-html="getRoleBadge(currentUser?.role)"></div>
+                
+                <!-- TOMBOL GANTI PASSWORD UNTUK USER LOGIN -->
+                <button @click="modals.ubahPassword = true" class="text-xs text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 bg-white border border-indigo-200 px-3 py-1 rounded-full shadow-sm transition-colors flex items-center">
+                    <i class="ph ph-key mr-1"></i> Ganti Password
+                </button>
             </div>
 
             <nav class="flex-1 px-4 py-4 space-y-2 overflow-y-auto">
@@ -941,7 +941,6 @@
                     </div>
                 </div>
 
-                <!-- DATA SISWA -->
                 <div x-show="currentTab === 'siswa'" x-transition.opacity.duration.300ms style="display: none;">
                     <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 w-full">
                         <div class="flex flex-col sm:flex-row gap-3 w-full md:w-auto flex-1">
@@ -1031,7 +1030,6 @@
                     </div>
                 </div>
 
-                <!-- TRANSAKSI -->
                 <div x-show="currentTab === 'transaksi'" x-transition.opacity.duration.300ms style="display: none;">
                     <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6 flex flex-wrap gap-4 items-end transition-colors duration-200">
                         <div class="flex-1" style="min-width: 200px;">
@@ -1144,18 +1142,17 @@
                     </div>
                 </div>
 
-                <!-- PENGGUNA TAB CONTENT -->
                 <div x-show="currentTab === 'pengguna' && isAdmin()" x-transition.opacity.duration.300ms style="display: none;">
                     
                     <div class="bg-blue-50 border border-blue-200 text-blue-800 p-4 rounded-lg mb-6 text-sm">
                         <p class="font-bold mb-1"><i class="ph ph-info mr-1"></i> Informasi Keamanan Supabase Auth</p>
-                        <p>Menu ini sekarang hanya berfungsi untuk mengatur <strong>Role (Hak Akses)</strong> dan <strong>Profil</strong> pengguna. Untuk mendaftarkan akun baru atau mereset password, Anda harus melakukannya langsung melalui menu <strong>Authentication</strong> di Dashboard Supabase untuk menjamin keamanan kunci server.</p>
+                        <p>Menu ini sekarang hanya berfungsi untuk mengatur <strong>Role (Hak Akses)</strong> dan <strong>Profil</strong> pengguna. Untuk mendaftarkan akun baru atau mereset password pengguna lain, Anda harus melakukannya langsung melalui menu <strong>Authentication</strong> di Dashboard Supabase untuk menjamin keamanan kunci server.</p>
                     </div>
 
                     <div class="flex justify-between items-center mb-4">
                         <h3 class="text-lg font-semibold text-gray-800">Otorisasi Hak Akses Pengguna</h3>
-                        <button @click="openModalPengguna()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center shadow-sm">
-                            <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah Profil Role Baru
+                        <button disabled class="bg-gray-400 text-white px-4 py-2 rounded-lg font-medium text-sm flex items-center shadow-sm cursor-not-allowed opacity-70" title="Akun baru otomatis masuk ke sini saat dibuat dari Auth Supabase">
+                            <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah via Supabase Auth
                         </button>
                     </div>
                     <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden w-full">
@@ -1430,20 +1427,21 @@
         </div>
     </div>
 
-    <!-- MODAL PROFIL PENGGUNA -->
+    <!-- MODAL PROFIL PENGGUNA (AKSES ROLE) -->
     <div x-show="modals.pengguna" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
         <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:p-0">
             <div x-show="modals.pengguna" x-transition.opacity class="fixed inset-0 transition-opacity"><div class="absolute inset-0 bg-gray-500 bg-opacity-75 backdrop-filter backdrop-blur-sm"></div></div>
             <div x-show="modals.pengguna" x-transition class="inline-block w-full max-w-md p-6 my-8 overflow-hidden text-left align-middle transition-all transform bg-white rounded-2xl shadow-xl border border-gray-100 relative">
-                <h3 class="text-lg font-bold leading-6 text-gray-900 mb-4" x-text="formPengguna.id ? 'Ubah Otorisasi Role' : 'Tambah Otorisasi Profil Baru'"></h3>
+                <h3 class="text-lg font-bold leading-6 text-gray-900 mb-4" x-text="'Ubah Profil & Otorisasi Role'"></h3>
                 <form @submit.prevent="submitPengguna" class="space-y-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Nama Lengkap</label>
                         <input type="text" x-model="formPengguna.nama_lengkap" required class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700">Email Autentikasi (Sesuai di Supabase)</label>
-                        <input type="email" x-model="formPengguna.email" required class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                        <label class="block text-sm font-medium text-gray-500">Email Autentikasi (Read Only)</label>
+                        <input type="email" x-model="formPengguna.email" readonly disabled class="mt-1 block w-full py-2 px-3 border border-gray-200 bg-gray-100 rounded-md shadow-sm sm:text-sm text-gray-500 cursor-not-allowed">
+                        <p class="text-xs text-gray-400 mt-1">Perubahan email utama harus dilakukan lewat Supabase.</p>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">Tingkat Hak Akses</label>
@@ -1457,6 +1455,42 @@
                         <button type="button" @click="modals.pengguna = false" class="px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">Batal</button>
                         <button type="submit" class="px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" :disabled="loading.action">
                             <span x-show="!loading.action">Simpan Profil</span><i x-show="loading.action" class="ph ph-spinner animate-spin"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL GANTI PASSWORD SENDIRI -->
+    <div x-show="modals.ubahPassword" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:p-0">
+            <div x-show="modals.ubahPassword" x-transition.opacity class="fixed inset-0 transition-opacity"><div class="absolute inset-0 bg-gray-500 bg-opacity-75 backdrop-filter backdrop-blur-sm"></div></div>
+            <div x-show="modals.ubahPassword" x-transition class="inline-block w-full max-w-md p-6 my-8 overflow-hidden text-left align-middle transition-all transform bg-white rounded-2xl shadow-xl border border-gray-100 relative">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-bold leading-6 text-gray-900">Ganti Password Keamanan</h3>
+                    <button @click="modals.ubahPassword = false" class="text-gray-400 hover:text-gray-600 focus:outline-none"><i class="ph ph-x text-xl"></i></button>
+                </div>
+                <p class="text-sm text-gray-500 mb-4">Ubah password untuk akun Anda (<strong x-text="currentUser?.email"></strong>).</p>
+                <form @submit.prevent="submitUbahPassword" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Password Baru</label>
+                        <div class="relative">
+                            <i class="ph ph-lock-key absolute left-3 top-2.5 text-gray-400 text-lg"></i>
+                            <input type="password" x-model="formUbahPassword.passwordBaru" required placeholder="Minimal 6 karakter" class="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Konfirmasi Password Baru</label>
+                        <div class="relative">
+                            <i class="ph ph-lock-key absolute left-3 top-2.5 text-gray-400 text-lg"></i>
+                            <input type="password" x-model="formUbahPassword.konfirmasiPassword" required placeholder="Tulis ulang password" class="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                        </div>
+                    </div>
+                    <div class="mt-6 pt-4 border-t border-gray-200">
+                        <button type="submit" class="w-full flex justify-center py-2.5 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500" :disabled="loading.action">
+                            <span x-show="!loading.action"><i class="ph ph-floppy-disk mr-1"></i> Simpan Password Baru</span>
+                            <i x-show="loading.action" class="ph ph-spinner animate-spin"></i>
                         </button>
                     </div>
                 </form>
