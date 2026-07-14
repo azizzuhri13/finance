@@ -87,12 +87,6 @@
                 filterKelasSiswa: '', 
                 filterTx: { search: '', tipe: '', month: '' },
 
-                // Pagination States (BARU)
-                pageSiswa: 1,
-                perPageSiswa: 10,
-                pageTx: 1,
-                perPageTx: 20,
-
                 initApp() {
                     try {
                         if (!window.supabase) this.showToast("Koneksi Supabase gagal dimuat.", "error");
@@ -278,10 +272,9 @@
                 async loadData() {
                     this.loading.global = true;
                     try {
-                        // Tambahkan limit(2000) untuk mencegah lag jika data di DB tiba-tiba membengkak
                         const promises = [
-                            sbClient.from('siswa').select('*').order('nama', { ascending: true }).limit(2000),
-                            sbClient.from('transaksi').select('*').order('tanggal', { ascending: false }).limit(2000)
+                            sbClient.from('siswa').select('*').order('nama', { ascending: true }),
+                            sbClient.from('transaksi').select('*').order('tanggal', { ascending: false })
                         ];
 
                         if (this.isAdmin()) {
@@ -381,15 +374,6 @@
                         }
                         return match;
                     });
-                },
-
-                // Logika Paginasi Siswa
-                get paginatedSiswa() {
-                    const start = (this.pageSiswa - 1) * this.perPageSiswa;
-                    return this.filteredSiswa.slice(start, start + this.perPageSiswa);
-                },
-                get totalPagesSiswa() {
-                    return Math.ceil(this.filteredSiswa.length / this.perPageSiswa) || 1;
                 },
 
                 openModalImport() {
@@ -623,15 +607,6 @@
                         }
                         return match;
                     });
-                },
-
-                // Logika Paginasi Transaksi
-                get paginatedTx() {
-                    const start = (this.pageTx - 1) * this.perPageTx;
-                    return this.filteredTransaksi.slice(start, start + this.perPageTx);
-                },
-                get totalPagesTx() {
-                    return Math.ceil(this.filteredTransaksi.length / this.perPageTx) || 1;
                 },
 
                 // Fitur Export CSV Transaksi
@@ -973,11 +948,11 @@
                     <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 w-full">
                         <div class="flex flex-col sm:flex-row gap-3 w-full md:w-auto flex-1">
                             <div class="relative w-full sm:w-64">
-                                <input type="text" x-model="searchSiswa" @input="pageSiswa = 1" placeholder="Cari nama atau kelas..." class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition appearance-none">
+                                <input type="text" x-model="searchSiswa" placeholder="Cari nama atau kelas..." class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition appearance-none">
                                 <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-gray-400 text-lg"></i>
                             </div>
                             <div class="relative w-full sm:w-48">
-                                <select x-model="filterKelasSiswa" @change="pageSiswa = 1" class="w-full pl-4 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition appearance-none bg-white dark:bg-gray-800 cursor-pointer">
+                                <select x-model="filterKelasSiswa" class="w-full pl-4 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition appearance-none bg-white dark:bg-gray-800 cursor-pointer">
                                     <option value="">Semua Kelas</option>
                                     <template x-for="kelas in uniqueKelasList" :key="kelas">
                                         <option :value="kelas" x-text="kelas"></option>
@@ -1010,7 +985,7 @@
                                     </tr>
                                 </thead>
                                 <tbody class="bg-white divide-y divide-gray-200">
-                                    <template x-for="s in paginatedSiswa" :key="s.id">
+                                    <template x-for="s in filteredSiswa" :key="s.id">
                                         <tr class="hover:bg-gray-50 transition">
                                             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="s.nama"></td>
                                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
@@ -1026,20 +1001,6 @@
                                 </tbody>
                             </table>
                         </div>
-
-                        <!-- KONTROL PAGINASI SISWA -->
-                        <div class="px-6 py-4 border-t border-gray-200 bg-gray-50 dark:bg-gray-800 flex flex-col sm:flex-row items-center justify-between gap-4">
-                            <div class="text-sm text-gray-500 dark:text-gray-400">
-                                Menampilkan <span class="font-medium text-gray-900 dark:text-gray-100" x-text="filteredSiswa.length > 0 ? ((pageSiswa - 1) * perPageSiswa) + 1 : 0"></span> - 
-                                <span class="font-medium text-gray-900 dark:text-gray-100" x-text="Math.min(pageSiswa * perPageSiswa, filteredSiswa.length)"></span> 
-                                dari <span class="font-medium text-gray-900 dark:text-gray-100" x-text="filteredSiswa.length"></span> data
-                            </div>
-                            <div class="flex gap-2">
-                                <button type="button" @click="pageSiswa > 1 ? pageSiswa-- : null" :class="{'opacity-50 cursor-not-allowed': pageSiswa === 1}" class="px-3 py-1.5 border border-gray-300 bg-white text-gray-700 rounded-md text-sm hover:bg-gray-50 transition-colors dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-600">Sebelumnya</button>
-                                <button type="button" @click="pageSiswa < totalPagesSiswa ? pageSiswa++ : null" :class="{'opacity-50 cursor-not-allowed': pageSiswa === totalPagesSiswa || filteredSiswa.length === 0}" class="px-3 py-1.5 border border-gray-300 bg-white text-gray-700 rounded-md text-sm hover:bg-gray-50 transition-colors dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-600">Selanjutnya</button>
-                            </div>
-                        </div>
-
                     </div>
                 </div>
 
@@ -1049,20 +1010,9 @@
                         <div class="flex-1" style="min-width: 200px;">
                             <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Cari Keterangan / Siswa</label>
                             <div class="relative">
-                                <input type="text" x-model="filterTx.search" @input="pageTx = 1" placeholder="Pencarian..." class="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+                                <input type="text" x-model="filterTx.search" placeholder="Pencarian..." class="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 text-sm">
                                 <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-gray-400"></i>
                             </div>
-                        </div>
-                        <div class="w-full sm:w-auto">
-                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Tipe</label>
-                            <select x-model="filterTx.tipe" @change="pageTx = 1" class="w-full py-2 px-3 border border-gray-300 bg-white rounded-lg focus:ring-indigo-500 focus:border-indigo-500 text-sm">
-                                <option value="">Semua Tipe</option><option value="Masuk">Pemasukan</option><option value="Keluar">Pengeluaran</option>
-                            </select>
-                        </div>
-                        <div class="w-full sm:w-auto">
-                            <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Bulan</label>
-                            <input type="month" x-model="filterTx.month" @change="pageTx = 1" class="w-full py-2 px-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 text-sm">
-                        </div>
                         </div>
                         <div class="w-full sm:w-auto">
                             <label class="block text-xs font-medium text-gray-500 uppercase mb-1">Tipe</label>
@@ -1103,7 +1053,7 @@
                                     </tr>
                                 </thead>
                                 <tbody class="bg-white divide-y divide-gray-200">
-                                    <template x-for="t in paginatedTx" :key="t.id_transaksi">
+                                    <template x-for="t in filteredTransaksi" :key="t.id_transaksi">
                                         <tr class="hover:bg-gray-50 transition">
                                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600" x-text="t.tanggal"></td>
                                             <td class="px-6 py-4 whitespace-nowrap">
@@ -1134,24 +1084,24 @@
                                 </tbody>
                             </table>
                         </div>
-
-                        <!-- KONTROL PAGINASI TRANSAKSI -->
-                        <div class="px-6 py-4 border-t border-gray-200 bg-gray-50 dark:bg-gray-800 flex flex-col sm:flex-row items-center justify-between gap-4">
-                            <div class="text-sm text-gray-500 dark:text-gray-400">
-                                Menampilkan <span class="font-medium text-gray-900 dark:text-gray-100" x-text="filteredTransaksi.length > 0 ? ((pageTx - 1) * perPageTx) + 1 : 0"></span> - 
-                                <span class="font-medium text-gray-900 dark:text-gray-100" x-text="Math.min(pageTx * perPageTx, filteredTransaksi.length)"></span> 
-                                dari <span class="font-medium text-gray-900 dark:text-gray-100" x-text="filteredTransaksi.length"></span> transaksi
-                            </div>
-                            <div class="flex gap-2">
-                                <button type="button" @click="pageTx > 1 ? pageTx-- : null" :class="{'opacity-50 cursor-not-allowed': pageTx === 1}" class="px-3 py-1.5 border border-gray-300 bg-white text-gray-700 rounded-md text-sm hover:bg-gray-50 transition-colors dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-600">Sebelumnya</button>
-                                <button type="button" @click="pageTx < totalPagesTx ? pageTx++ : null" :class="{'opacity-50 cursor-not-allowed': pageTx === totalPagesTx || filteredTransaksi.length === 0}" class="px-3 py-1.5 border border-gray-300 bg-white text-gray-700 rounded-md text-sm hover:bg-gray-50 transition-colors dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-600">Selanjutnya</button>
-                            </div>
-                        </div>
-
                     </div>
                 </div>
 
-                <!-- DATA USER PENGGUNA (HANYA ADMIN) -->
+            </div>
+        </main>
+    </div>
+
+    <!-- ============================================== -->
+    <!-- SEMUA KUMPULAN MODAL -->
+    <!-- ============================================== -->
+
+    <!-- MODAL KELOLA KATEGORI (BARU) -->
+    <div x-show="modals.kategori" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:p-0">
+            <div x-show="modals.kategori" x-transition.opacity class="fixed inset-0 transition-opacity"><div class="absolute inset-0 bg-gray-500 bg-opacity-75 backdrop-filter backdrop-blur-sm"></div></div>
+            <div x-show="modals.kategori" x-transition class="inline-block w-full max-w-md p-6 my-8 overflow-hidden text-left align-middle transition-all transform bg-white rounded-2xl shadow-xl border border-gray-100 relative">
+                
+                <div class="flex justify-between items-center mb-4 pb-3 border-b border-gray-200">
                     <h3 class="text-lg font-bold leading-6 text-gray-900">Kelola Kategori Transaksi</h3>
                     <button @click="modals.kategori = false" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-xl"></i></button>
                 </div>
