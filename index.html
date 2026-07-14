@@ -373,7 +373,12 @@
                     this.formKategori = { ...k };
                 },
                 async submitKategori() {
-                    if(!this.canEdit()) return;
+                    // Cek jika bukan admin, tolak akses.
+                    if(!this.isAdmin()) {
+                        this.showToast("Akses ditolak! Hanya Administrator yang dapat mengelola kategori.", "error");
+                        return;
+                    }
+
                     this.loading.action = true;
                     try {
                         if (this.formKategori.id && typeof this.formKategori.id !== 'string') {
@@ -403,7 +408,13 @@
                     this.loading.action = false;
                 },
                 async deleteKategori(id) {
-                    if(!this.canEdit() || !confirm("Hapus kategori ini? Pastikan kategori ini belum dipakai di transaksi agar data tetap rapi.")) return;
+                    // Cek jika bukan admin, tolak akses.
+                    if(!this.isAdmin()) {
+                        this.showToast("Akses ditolak! Hanya Administrator yang dapat menghapus kategori.", "error");
+                        return;
+                    }
+                    if(!confirm("Hapus kategori ini? Pastikan kategori ini belum dipakai di transaksi agar data tetap rapi.")) return;
+                    
                     try {
                         const { error } = await sbClient.from('kategori').delete().eq('id', id);
                         if (error) throw error;
@@ -448,13 +459,13 @@
                     this.formTx.items.forEach(item => item.kategori = defKat);
                 },
 
-                // FITUR BARU: Tambah baris baru di dalam form transaksi
+                // Tambah baris baru di dalam form transaksi
                 addTxItem() {
                     const availableCats = this.kategoriList.filter(k => k.tipe === this.formTx.tipe);
                     const defKat = availableCats.length > 0 ? availableCats[0].nama : '';
                     this.formTx.items.push({ kategori: defKat, jumlah: '', keterangan: '' });
                 },
-                // FITUR BARU: Hapus baris dari form transaksi
+                // Hapus baris dari form transaksi
                 removeTxItem(index) {
                     this.formTx.items.splice(index, 1);
                 },
@@ -1198,9 +1209,12 @@
                                     <div class="sm:col-span-4">
                                         <div class="flex justify-between items-center mb-1">
                                             <label class="block text-sm font-medium text-gray-700">Kategori</label>
-                                            <button type="button" x-show="index === 0" @click="modals.kategori = true; modals.transaksi = false;" class="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center focus:outline-none">
+                                            
+                                            <!-- UPDATE DISINI: Tombol kelola kategori hanya muncul untuk Admin -->
+                                            <button type="button" x-show="index === 0 && isAdmin()" @click="modals.kategori = true; modals.transaksi = false;" class="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center focus:outline-none">
                                                 <i class="ph ph-gear mr-1"></i> Kelola
                                             </button>
+                                            
                                         </div>
                                         <select x-model="item.kategori" required class="block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
                                             <template x-for="kat in kategoriList.filter(k => k.tipe === formTx.tipe)" :key="kat.id">
