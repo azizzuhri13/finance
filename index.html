@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aplikasi Pencatatan Keuangan (Optimized)</title>
+    <title>Aplikasi Pencatatan Keuangan (Secured)</title>
     
     <!-- Tailwind CSS -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
@@ -34,7 +34,8 @@
                     items: [{ kategori: '', jumlah: '', keterangan: '' }]
                 };
             };
-            const getEmptyPengguna = () => ({ id: '', username: '', password: '', nama_lengkap: '', role: 'guest' });
+            // Mengubah username menjadi email untuk kompatibilitas Supabase Auth
+            const getEmptyPengguna = () => ({ id: '', email: '', password: '', nama_lengkap: '', role: 'guest' });
             const getEmptyKategori = () => ({ id: '', nama: '', tipe: 'Masuk' }); 
 
             return {
@@ -42,7 +43,7 @@
                 isDarkMode: false,
                 isLoggedIn: false,
                 currentUser: null,
-                loginForm: { username: '', password: '' },
+                loginForm: { email: '', password: '' }, // Diubah ke email
 
                 // UI States
                 sidebarOpen: false,
@@ -54,13 +55,7 @@
                 // Base Data States
                 stats: { totalIncome: 0, totalExpense: 0, netBalance: 0 },
                 penggunaList: [],
-                kategoriList: [
-                    { id: '1', nama: 'SPP', tipe: 'Masuk' },
-                    { id: '2', nama: 'Katering', tipe: 'Masuk' },
-                    { id: '3', nama: 'Madin', tipe: 'Masuk' },
-                    { id: '4', nama: 'Operasional', tipe: 'Keluar' },
-                    { id: '5', nama: 'Honor / Gaji', tipe: 'Keluar' }
-                ],
+                kategoriList: [],
                 
                 // Chart & Print
                 chartInstance: null,
@@ -68,7 +63,7 @@
                 printData: null,
 
                 // Reference Data (Lightweight mapping for joins)
-                siswaDict: {}, // { id: nama }
+                siswaDict: {},
                 uniqueKelasList: [],
 
                 // Pagination & Data States (Siswa)
@@ -94,7 +89,7 @@
                 importFile: null,
                 importFileTx: null,
 
-                initApp() {
+                async initApp() {
                     try {
                         if (!window.supabase) this.showToast("Koneksi Supabase gagal dimuat.", "error");
                         else sbClient = window.supabase.createClient(supabaseUrl, supabaseKey);
@@ -107,48 +102,78 @@
                         document.body.classList.add('dark');
                     }
 
-                    const savedSession = localStorage.getItem('eKeuanganSession');
-                    if (savedSession) {
-                        this.currentUser = JSON.parse(savedSession);
-                        this.isLoggedIn = true;
-                        if (sbClient) this.loadInitialData();
+                    // MENGGUNAKAN SUPABASE AUTH SESSION MANAGEMENT (Lebih Aman dari localStorage manual)
+                    if (sbClient) {
+                        const { data: { session }, error } = await sbClient.auth.getSession();
+                        if (session) {
+                            await this.loadProfileFromSession(session);
+                        }
+
+                        // Listen to Auth Changes (misal token expired atau logout di tab lain)
+                        sbClient.auth.onAuthStateChange(async (event, session) => {
+                            if (event === 'SIGNED_OUT') {
+                                this.isLoggedIn = false;
+                                this.currentUser = null;
+                                this.currentTab = 'dashboard';
+                            }
+                        });
                     }
                 },
 
+                async loadProfileFromSession(session) {
+                    this.loading.global = true;
+                    try {
+                        // Mengambil role dan data profil dari tabel pengguna berdasarkan email
+                        const { data: profile, error } = await sbClient.from('pengguna')
+                            .select('*')
+                            .eq('email', session.user.email)
+                            .single();
+
+                        if (error) throw new Error("Profil tidak ditemukan di database. Hubungi Admin.");
+                        
+                        this.currentUser = { ...session.user, ...profile };
+                        this.isLoggedIn = true;
+                        this.loadInitialData();
+                    } catch (e) {
+                        this.showToast(e.message, 'error');
+                        sbClient.auth.signOut();
+                    }
+                    this.loading.global = false;
+                },
+
                 // ==========================================
-                // AUTHENTICATION LOGIC
+                // SECURE AUTHENTICATION LOGIC
                 // ==========================================
                 async doLogin() {
                     this.loading.login = true;
                     try {
-                        const { data, error } = await sbClient.from('pengguna')
-                            .select('*')
-                            .eq('username', this.loginForm.username)
-                            .eq('password', this.loginForm.password)
-                            .single();
+                        // 1. Login menggunakan Supabase Auth (Mengenkripsi password secara otomatis)
+                        const { data: authData, error: authError } = await sbClient.auth.signInWithPassword({
+                            email: this.loginForm.email,
+                            password: this.loginForm.password
+                        });
                         
-                        if (error || !data) throw new Error("Username atau password salah!");
+                        if (authError) throw new Error("Email atau password salah!");
 
-                        this.currentUser = data;
-                        this.isLoggedIn = true;
-                        localStorage.setItem('eKeuanganSession', JSON.stringify(data));
+                        // 2. Load Profile (Role dll)
+                        await this.loadProfileFromSession(authData.session);
                         
-                        this.loginForm = { username: '', password: '' };
-                        this.showToast(`Selamat datang, ${data.nama_lengkap}!`);
-                        this.loadInitialData();
+                        this.loginForm = { email: '', password: '' };
+                        this.showToast(`Selamat datang, ${this.currentUser.nama_lengkap}!`);
                     } catch (e) {
                         this.showToast(e.message, 'error');
                     }
                     this.loading.login = false;
                 },
 
-                doLogout() {
-                    this.isLoggedIn = false;
-                    this.currentUser = null;
-                    localStorage.removeItem('eKeuanganSession');
-                    this.currentTab = 'dashboard';
+                async doLogout() {
+                    this.loading.global = true;
+                    await sbClient.auth.signOut();
+                    this.loading.global = false;
                 },
 
+                // Fungsi ini sekarang hanya untuk UI Toggling (menyembunyikan tombol). 
+                // Keamanan sebenarnya (Penolakan Query) sekarang di-handle oleh RLS di database.
                 canEdit() { return this.currentUser && ['admin', 'finance'].includes(this.currentUser.role); },
                 isAdmin() { return this.currentUser && this.currentUser.role === 'admin'; },
 
@@ -183,7 +208,6 @@
                 },
                 getSiswaLabel(id) {
                     if (!id) return "-- Pilih Siswa (Opsional) --";
-                    // Untuk form kita butuh nama, list asli diambil dari db
                     return this.siswaDict[id] || "Siswa Terpilih"; 
                 },
                 getRoleBadge(role) {
@@ -204,25 +228,18 @@
                 async loadInitialData() {
                     this.loading.global = true;
                     try {
-                        // 1. Load Categories
                         try {
                             const resKat = await sbClient.from('kategori').select('*').order('nama');
                             if (!resKat.error && resKat.data) this.kategoriList = resKat.data;
                         } catch (ek) {}
 
-                        // 2. Load Users if Admin
                         if (this.isAdmin()) {
                             const resUsers = await sbClient.from('pengguna').select('*').order('nama_lengkap');
                             if(!resUsers.error) this.penggunaList = resUsers.data;
                         }
 
-                        // 3. Load Base References (Lightweight)
                         await this.loadReferences();
-
-                        // 4. Load Dashboard Stats (Lightweight)
                         await this.loadStats();
-
-                        // 5. Load Paginated Tables
                         await Promise.all([this.loadSiswa(), this.loadTransaksi()]);
 
                     } catch (e) {
@@ -232,7 +249,6 @@
                     }
                 },
 
-                // Mengambil data referensi ringan (Dictionary Nama & List Kelas)
                 async loadReferences() {
                     const { data, error } = await sbClient.from('siswa').select('id, nama, kelas');
                     if (!error && data) {
@@ -246,9 +262,7 @@
                     }
                 },
 
-                // Load spesifik untuk chart dan card summary
                 async loadStats() {
-                    // Hanya fetch kolom yang dibutuhkan agar sangat cepat meski data ribuan
                     const { data, error } = await sbClient.from('transaksi').select('tipe, jumlah, tanggal');
                     if (!error && data) {
                         let income = 0, expense = 0;
@@ -267,19 +281,17 @@
                     try {
                         let query = sbClient.from('siswa').select('*', { count: 'exact' });
 
-                        // Server-side filtering
                         if (this.filterKelasSiswa) query = query.eq('kelas', this.filterKelasSiswa);
                         if (this.searchSiswa) {
-                            // Mencari di nama ATAU kelas
                             query = query.or(`nama.ilike.%${this.searchSiswa}%,kelas.ilike.%${this.searchSiswa}%`);
                         }
 
-                        // Server-side Pagination
                         const from = (this.pageSiswa - 1) * this.limitSiswa;
                         const to = from + this.limitSiswa - 1;
                         query = query.range(from, to).order('nama', { ascending: true });
 
                         const { data, count, error } = await query;
+                        // Jika akses ditolak karena RLS (contoh: guest coba fetch semua, meskipun policy kita izinkan select)
                         if (error) throw error;
                         
                         this.siswaList = data || [];
@@ -290,7 +302,6 @@
                     this.loading.siswa = false;
                 },
 
-                // Reset page & reload (dipanggil dari input search/filter)
                 filterSiswaChanged() {
                     this.pageSiswa = 1;
                     this.loadSiswa();
@@ -303,9 +314,7 @@
 
                         if (this.filterTx.tipe) query = query.eq('tipe', this.filterTx.tipe);
                         if (this.filterTx.month) {
-                            // Pencarian bulan, misal: '2026-05'
                             const start = `${this.filterTx.month}-01`;
-                            // trik mencari akhir bulan
                             const d = new Date(start);
                             const end = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0];
                             query = query.gte('tanggal', start).lte('tanggal', end);
@@ -403,16 +412,19 @@
                     try {
                         if (this.formSiswa.id) {
                             const { error } = await sbClient.from('siswa').update({ nama: this.formSiswa.nama, kelas: this.formSiswa.kelas }).eq('id', this.formSiswa.id);
-                            if (error) throw error;
+                            if (error) throw error; // Jika RLS menolak, akan dilempar ke sini
                         } else {
                             const { error } = await sbClient.from('siswa').insert([{ nama: this.formSiswa.nama, kelas: this.formSiswa.kelas }]);
                             if (error) throw error;
                         }
                         this.modals.siswa = false;
                         this.showToast("Data Siswa berhasil disimpan.");
-                        this.loadSiswa(); // Hanya reload data tabel ini
-                        this.loadReferences(); // Update lookup dict
-                    } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
+                        this.loadSiswa(); 
+                        this.loadReferences(); 
+                    } catch(e) { 
+                        // Pesan RLS akan muncul di sini jika ada upaya bobol
+                        this.showToast("Gagal: Akses Ditolak oleh Server. " + e.message, 'error'); 
+                    }
                     this.loading.action = false;
                 },
                 async deleteSiswa(id) {
@@ -428,7 +440,6 @@
 
                 // EXPORT & IMPORT SISWA
                 async exportSiswaCSV() {
-                    // Export all matching current filter, not just current page
                     this.showToast("Mengambil data untuk diexport...", "info");
                     let query = sbClient.from('siswa').select('*');
                     if (this.filterKelasSiswa) query = query.eq('kelas', this.filterKelasSiswa);
@@ -508,10 +519,9 @@
                         }
                         this.resetFormKategori();
                         this.showToast("Kategori berhasil disimpan.");
-                        // Reload categories
                         const resKat = await sbClient.from('kategori').select('*').order('nama');
                         if (!resKat.error && resKat.data) this.kategoriList = resKat.data;
-                    } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
+                    } catch(e) { this.showToast("Gagal (Ditolak Server): " + e.message, 'error'); }
                     this.loading.action = false;
                 },
                 async deleteKategori(id) {
@@ -584,9 +594,9 @@
                         }
                         this.modals.transaksi = false;
                         this.showToast("Transaksi dicatat.");
-                        this.loadTransaksi(); // Reload tabel tx
-                        this.loadStats(); // Update dashboard
-                    } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
+                        this.loadTransaksi();
+                        this.loadStats();
+                    } catch(e) { this.showToast("Gagal (Ditolak Server): " + e.message, 'error'); }
                     this.loading.action = false;
                 },
 
@@ -651,8 +661,6 @@
                     if (!this.importFileTx) return this.showToast("Pilih file CSV.", "error");
                     this.loading.action = true;
                     
-                    // Kita butuh search id_siswa by name, karena ini import, data lama tidak efisien jika dicari manual, tapi untungnya dict kita ringan
-                    // Balik dictionary untuk lookup name -> id
                     const nameToIdDict = {};
                     for(const [id, nama] of Object.entries(this.siswaDict)) {
                         nameToIdDict[nama.toLowerCase()] = id;
@@ -700,7 +708,7 @@
                 },
 
                 // ==========================================
-                // CRUD PENGGUNA (HANYA ADMIN)
+                // CRUD PENGGUNA (HANYA MENGUBAH ROLE - ADMIN ONLY)
                 // ==========================================
                 emptyFormPengguna() { return getEmptyPengguna(); },
                 openModalPengguna(data = null) {
@@ -712,30 +720,34 @@
                     this.loading.action = true;
                     try {
                         const payload = {
-                            username: this.formPengguna.username, password: this.formPengguna.password,
-                            nama_lengkap: this.formPengguna.nama_lengkap, role: this.formPengguna.role
+                            email: this.formPengguna.email,
+                            nama_lengkap: this.formPengguna.nama_lengkap, 
+                            role: this.formPengguna.role
                         };
                         if (this.formPengguna.id) {
                             const { error } = await sbClient.from('pengguna').update(payload).eq('id', this.formPengguna.id);
                             if (error) throw error;
+                            this.showToast("Role pengguna diperbarui.");
                         } else {
+                            // Untuk pengguna baru, insert ke tabel profil
                             const { error } = await sbClient.from('pengguna').insert([payload]);
                             if (error) throw error;
+                            this.showToast("Profil ditambahkan. (Ingat untuk membuat Auth di Dashboard Supabase)");
                         }
                         this.modals.pengguna = false;
-                        this.showToast("Data User disimpan.");
+                        
                         const resUsers = await sbClient.from('pengguna').select('*').order('nama_lengkap');
                         if(!resUsers.error) this.penggunaList = resUsers.data;
                     } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
                     this.loading.action = false;
                 },
                 async deletePengguna(id) {
-                    if(!this.isAdmin() || !confirm("Hapus user ini?")) return;
-                    if(id === this.currentUser.id) return this.showToast("Tidak bisa menghapus akun sendiri!", "error");
+                    if(!this.isAdmin() || !confirm("Hapus profil user ini? (Ini hanya menghapus profil, hapus Auth di Dashboard Supabase)")) return;
+                    if(id === this.currentUser.id) return this.showToast("Tidak bisa menghapus profil sendiri!", "error");
                     try {
                         const { error } = await sbClient.from('pengguna').delete().eq('id', id);
                         if (error) throw error;
-                        this.showToast("User dihapus.");
+                        this.showToast("Profil dihapus.");
                         const resUsers = await sbClient.from('pengguna').select('*').order('nama_lengkap');
                         if(!resUsers.error) this.penggunaList = resUsers.data;
                     } catch(e) { this.showToast("Gagal: " + e.message, 'error'); }
@@ -793,7 +805,7 @@
 <body class="bg-gray-50 text-gray-800 font-sans antialiased transition-colors duration-200" x-data="appData()" x-init="initApp()" x-cloak>
 
     <!-- ============================================================== -->
-    <!-- HALAMAN LOGIN -->
+    <!-- HALAMAN LOGIN (MENGGUNAKAN SUPABASE AUTH) -->
     <!-- ============================================================== -->
     <div x-show="!isLoggedIn" class="min-h-screen flex items-center justify-center p-4">
         <div class="max-w-md w-full bg-white rounded-2xl shadow-xl border border-gray-100 p-8 relative overflow-hidden transition-colors duration-200">
@@ -803,18 +815,19 @@
             <div class="relative z-10">
                 <div class="text-center mb-8">
                     <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-indigo-100 text-indigo-600 mb-4">
-                        <i class="ph-fill ph-wallet text-3xl"></i>
+                        <i class="ph-fill ph-shield-check text-3xl"></i>
                     </div>
                     <h2 class="text-2xl font-bold text-gray-900">E-Keuangan Login</h2>
-                    <p class="text-sm text-gray-500 mt-1">Silakan masuk menggunakan akun Anda</p>
+                    <p class="text-sm text-green-600 mt-1 font-medium"><i class="ph ph-lock-key"></i> Terenkripsi & Aman</p>
                 </div>
 
                 <form @submit.prevent="doLogin" class="space-y-5">
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                        <!-- Diubah ke Email -->
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
                         <div class="relative">
-                            <i class="ph ph-user absolute left-3 top-2.5 text-gray-400 text-lg"></i>
-                            <input type="text" x-model="loginForm.username" required class="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-shadow bg-gray-50 dark:bg-gray-800">
+                            <i class="ph ph-envelope absolute left-3 top-2.5 text-gray-400 text-lg"></i>
+                            <input type="email" x-model="loginForm.email" required placeholder="akun@sekolah.com" class="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-shadow bg-gray-50 dark:bg-gray-800">
                         </div>
                     </div>
                     <div>
@@ -843,12 +856,12 @@
 
         <aside :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'" class="transform fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-gray-200 transition-transform duration-300 ease-in-out lg:translate-x-0 flex flex-col shadow-sm lg:shadow-none">
             <div class="flex items-center justify-center h-16 border-b border-gray-200 px-4">
-                <i class="ph-fill ph-wallet text-indigo-600 text-2xl mr-2"></i>
-                <h1 class="text-lg font-bold text-gray-800 tracking-tight">E-Keuangan</h1>
+                <i class="ph-fill ph-shield-check text-green-600 text-2xl mr-2"></i>
+                <h1 class="text-lg font-bold text-gray-800 tracking-tight">E-Keuangan <span class="text-xs text-gray-400 font-normal">v2</span></h1>
             </div>
             
             <div class="px-4 py-4 border-b border-gray-100 flex flex-col items-center justify-center">
-                <div class="h-12 w-12 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xl font-bold mb-2 uppercase" x-text="currentUser?.nama_lengkap.charAt(0)"></div>
+                <div class="h-12 w-12 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xl font-bold mb-2 uppercase" x-text="currentUser?.nama_lengkap?.charAt(0) || 'U'"></div>
                 <p class="text-sm font-semibold text-gray-800 text-center truncate w-full" x-text="currentUser?.nama_lengkap"></p>
                 <div class="mt-1 text-center" x-html="getRoleBadge(currentUser?.role)"></div>
             </div>
@@ -864,7 +877,7 @@
                     <i class="ph ph-swap text-lg mr-3"></i> Transaksi
                 </button>
                 <button x-show="isAdmin()" @click="changeTab('pengguna')" :class="currentTab === 'pengguna' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-100'" class="w-full flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors">
-                    <i class="ph ph-shield-check text-lg mr-3"></i> Data User
+                    <i class="ph ph-shield-check text-lg mr-3"></i> Otorisasi User
                 </button>
             </nav>
             <div class="p-4 border-t border-gray-200">
@@ -891,7 +904,7 @@
 
             <div class="flex-1 p-4 sm:p-6 lg:p-8 overflow-x-hidden w-full">
                 <div x-show="loading.global" class="mb-6 bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded flex items-center">
-                    <i class="ph ph-spinner animate-spin text-xl mr-3"></i> <span>Memproses inisialisasi aplikasi...</span>
+                    <i class="ph ph-spinner animate-spin text-xl mr-3"></i> <span>Memproses keamanan aplikasi...</span>
                 </div>
 
                 <!-- DASHBOARD -->
@@ -920,10 +933,10 @@
 
                     <div class="bg-indigo-600 text-white rounded-xl shadow-sm p-6 mb-8 relative overflow-hidden">
                         <i class="ph ph-shield-check absolute -right-6 -bottom-6 text-9xl text-indigo-500 opacity-30"></i>
-                        <h3 class="text-xl font-bold mb-2 relative z-10" x-text="`Halo, ${currentUser?.nama_lengkap}!`"></h3>
-                        <p class="text-indigo-100 mb-1 relative z-10">Anda masuk menggunakan tingkat akses <strong class="uppercase bg-indigo-800 px-2 py-0.5 rounded text-xs ml-1" x-text="currentUser?.role"></strong>.</p>
-                        <p class="text-sm text-indigo-200 mt-4 relative z-10" x-show="!canEdit()">
-                            <i class="ph ph-info mr-1"></i> Sebagai Guest, Anda hanya dapat melihat data secara baca-saja.
+                        <h3 class="text-xl font-bold mb-2 relative z-10" x-text="`Sistem Keamanan Aktif (RLS)`"></h3>
+                        <p class="text-indigo-100 mb-1 relative z-10">Tingkat Otorisasi Anda Saat Ini: <strong class="uppercase bg-indigo-800 px-2 py-0.5 rounded text-xs ml-1" x-text="currentUser?.role"></strong></p>
+                        <p class="text-sm text-indigo-200 mt-4 relative z-10">
+                            <i class="ph ph-info mr-1"></i> Aplikasi kini menggunakan Supabase Auth dan Row Level Security (RLS). Aksi tidak berwenang akan otomatis ditolak langsung dari Database.
                         </p>
                     </div>
                 </div>
@@ -933,7 +946,6 @@
                     <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 w-full">
                         <div class="flex flex-col sm:flex-row gap-3 w-full md:w-auto flex-1">
                             <div class="relative w-full sm:w-64">
-                                <!-- Debounce added to avoid spamming API -->
                                 <input type="text" x-model="searchSiswa" @input.debounce.500ms="filterSiswaChanged()" placeholder="Cari nama atau kelas..." class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition appearance-none">
                                 <i class="ph ph-magnifying-glass absolute left-3 top-2.5 text-gray-400 text-lg"></i>
                             </div>
@@ -961,7 +973,6 @@
                     </div>
 
                     <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden transition-colors duration-200 w-full relative">
-                        <!-- Loading Indicator Data Table -->
                         <div x-show="loading.siswa" class="absolute inset-0 bg-white bg-opacity-70 z-10 flex items-center justify-center backdrop-filter backdrop-blur-sm">
                             <i class="ph ph-spinner animate-spin text-4xl text-indigo-600"></i>
                         </div>
@@ -976,7 +987,6 @@
                                     </tr>
                                 </thead>
                                 <tbody class="bg-white divide-y divide-gray-200">
-                                    <!-- Use actual List (no longer computed property as it's filtered server-side) -->
                                     <template x-for="s in siswaList" :key="s.id">
                                         <tr class="hover:bg-gray-50 transition">
                                             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="s.nama"></td>
@@ -994,7 +1004,6 @@
                             </table>
                         </div>
                         
-                        <!-- PAGINATION SISWA -->
                         <div class="bg-gray-50 px-4 py-3 border-t border-gray-200 flex items-center justify-between sm:px-6">
                             <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
                                 <div>
@@ -1019,7 +1028,6 @@
                                 </div>
                             </div>
                         </div>
-
                     </div>
                 </div>
 
@@ -1058,7 +1066,6 @@
                     </div>
 
                     <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden transition-colors duration-200 w-full relative">
-                        <!-- Loading Indicator -->
                         <div x-show="loading.tx" class="absolute inset-0 bg-white bg-opacity-70 z-10 flex items-center justify-center backdrop-filter backdrop-blur-sm">
                             <i class="ph ph-spinner animate-spin text-4xl text-indigo-600"></i>
                         </div>
@@ -1077,7 +1084,6 @@
                                     </tr>
                                 </thead>
                                 <tbody class="bg-white divide-y divide-gray-200">
-                                    <!-- Iterate from Paginated List directly -->
                                     <template x-for="t in transaksiList" :key="t.id_transaksi">
                                         <tr class="hover:bg-gray-50 transition">
                                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600" x-text="t.tanggal"></td>
@@ -1110,7 +1116,6 @@
                             </table>
                         </div>
 
-                        <!-- PAGINATION TRANSAKSI -->
                         <div class="bg-gray-50 px-4 py-3 border-t border-gray-200 flex items-center justify-between sm:px-6">
                             <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
                                 <div>
@@ -1139,13 +1144,18 @@
                     </div>
                 </div>
 
-                <!-- PENGGUNA TAB CONTENT KEEPS PREVIOUS STRUCTURE -->
+                <!-- PENGGUNA TAB CONTENT -->
                 <div x-show="currentTab === 'pengguna' && isAdmin()" x-transition.opacity.duration.300ms style="display: none;">
-                    <!-- User Management Template Re-used -->
-                    <div class="flex justify-between items-center mb-6">
-                        <h3 class="text-lg font-semibold text-gray-800">Manajemen Pengguna</h3>
+                    
+                    <div class="bg-blue-50 border border-blue-200 text-blue-800 p-4 rounded-lg mb-6 text-sm">
+                        <p class="font-bold mb-1"><i class="ph ph-info mr-1"></i> Informasi Keamanan Supabase Auth</p>
+                        <p>Menu ini sekarang hanya berfungsi untuk mengatur <strong>Role (Hak Akses)</strong> dan <strong>Profil</strong> pengguna. Untuk mendaftarkan akun baru atau mereset password, Anda harus melakukannya langsung melalui menu <strong>Authentication</strong> di Dashboard Supabase untuk menjamin keamanan kunci server.</p>
+                    </div>
+
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-lg font-semibold text-gray-800">Otorisasi Hak Akses Pengguna</h3>
                         <button @click="openModalPengguna()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition flex items-center shadow-sm">
-                            <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah User
+                            <i class="ph ph-plus-circle mr-2 text-lg"></i> Tambah Profil Role Baru
                         </button>
                     </div>
                     <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden w-full">
@@ -1154,8 +1164,8 @@
                                 <thead class="bg-gray-50">
                                     <tr>
                                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nama Lengkap</th>
-                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Username</th>
-                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email Akun</th>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role Terdaftar</th>
                                         <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi</th>
                                     </tr>
                                 </thead>
@@ -1163,7 +1173,7 @@
                                     <template x-for="u in penggunaList" :key="u.id">
                                         <tr class="hover:bg-gray-50 transition">
                                             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="u.nama_lengkap"></td>
-                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="u.username"></td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="u.email"></td>
                                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-html="getRoleBadge(u.role)"></td>
                                             <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                                 <button @click="openModalPengguna(u)" class="text-indigo-600 hover:text-indigo-900 mr-3"><i class="ph ph-pencil-simple text-lg"></i></button>
@@ -1312,13 +1322,11 @@
                             <button type="button" @click="dropdownOpen = !dropdownOpen; if(dropdownOpen) { $nextTick(() => $refs.searchInput.focus()); search = ''; }" @click.outside="dropdownOpen = false" class="flex items-center justify-between w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm text-left">
                                 <span class="truncate" :class="formTx.id_siswa ? 'text-gray-900 font-medium' : 'text-gray-500'" x-text="getSiswaLabel(formTx.id_siswa)"></span><i class="ph ph-caret-down text-gray-400"></i>
                             </button>
-                            <!-- List Dropdown dengan Dictionary Lookup ringan -->
                             <div x-show="dropdownOpen" x-transition.opacity class="absolute z-50 mt-1 w-full bg-white shadow-lg max-h-60 rounded-md py-1 text-base ring-1 ring-black ring-opacity-5 overflow-auto focus:outline-none sm:text-sm" style="display: none;">
                                 <div class="sticky top-0 z-10 bg-white px-2 py-2 border-b border-gray-100">
                                     <div class="relative"><i class="ph ph-magnifying-glass absolute left-2.5 top-2 text-gray-400"></i><input type="text" x-ref="searchInput" x-model="search" placeholder="Cari (Hanya di Cache)..." class="w-full py-1.5 pl-8 pr-3 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"></div>
                                 </div>
                                 <div @click="formTx.id_siswa = ''; dropdownOpen = false" class="cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-gray-100 text-gray-900"><span class="block truncate italic text-gray-500">-- Kosongkan --</span></div>
-                                <!-- Convert Dict to Array for simple client-side search in Dropdown -->
                                 <template x-for="[sId, sNama] in Object.entries(siswaDict).filter(([id, nama]) => nama.toLowerCase().includes(search.toLowerCase()))" :key="sId">
                                     <div @click="formTx.id_siswa = sId; dropdownOpen = false" class="group cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-indigo-600 hover:text-white" :class="formTx.id_siswa === sId ? 'bg-indigo-50 text-indigo-900 font-semibold' : 'text-gray-900'">
                                         <span class="block truncate" x-text="sNama"></span>
@@ -1422,24 +1430,20 @@
         </div>
     </div>
 
-    <!-- MODAL PENGGUNA (AKUN) -->
+    <!-- MODAL PROFIL PENGGUNA -->
     <div x-show="modals.pengguna" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;">
         <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:p-0">
             <div x-show="modals.pengguna" x-transition.opacity class="fixed inset-0 transition-opacity"><div class="absolute inset-0 bg-gray-500 bg-opacity-75 backdrop-filter backdrop-blur-sm"></div></div>
             <div x-show="modals.pengguna" x-transition class="inline-block w-full max-w-md p-6 my-8 overflow-hidden text-left align-middle transition-all transform bg-white rounded-2xl shadow-xl border border-gray-100 relative">
-                <h3 class="text-lg font-bold leading-6 text-gray-900 mb-4" x-text="formPengguna.id ? 'Edit Data Akun' : 'Tambah Akun Pengguna'"></h3>
+                <h3 class="text-lg font-bold leading-6 text-gray-900 mb-4" x-text="formPengguna.id ? 'Ubah Otorisasi Role' : 'Tambah Otorisasi Profil Baru'"></h3>
                 <form @submit.prevent="submitPengguna" class="space-y-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Nama Lengkap</label>
                         <input type="text" x-model="formPengguna.nama_lengkap" required class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700">Username</label>
-                        <input type="text" x-model="formPengguna.username" required class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Password</label>
-                        <input type="text" x-model="formPengguna.password" required class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                        <label class="block text-sm font-medium text-gray-700">Email Autentikasi (Sesuai di Supabase)</label>
+                        <input type="email" x-model="formPengguna.email" required class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">Tingkat Hak Akses</label>
@@ -1452,7 +1456,7 @@
                     <div class="mt-6 flex justify-end gap-3 border-t border-gray-200 pt-4">
                         <button type="button" @click="modals.pengguna = false" class="px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">Batal</button>
                         <button type="submit" class="px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" :disabled="loading.action">
-                            <span x-show="!loading.action">Simpan Akun</span><i x-show="loading.action" class="ph ph-spinner animate-spin"></i>
+                            <span x-show="!loading.action">Simpan Profil</span><i x-show="loading.action" class="ph ph-spinner animate-spin"></i>
                         </button>
                     </div>
                 </form>
